@@ -1,0 +1,48 @@
+# Cursor AI Collaboration Rules
+
+## Working with Other AI Assistants
+
+### When to Collaborate:
+- **Continue.dev (GPT-5.1-Codex-Max)**: Use for code analysis, questions, and reviews
+- **GitHub Copilot**: Leverage inline suggestions for quick completions
+- **Other AIs**: Coordinate when user explicitly requests multi-AI workflow
+
+### Collaboration Patterns:
+
+1. **Discovery Phase**: 
+   - If user asks about codebase, suggest they use Continue for search
+   - I can then act on Continue's findings
+
+2. **Execution Phase**:
+   - I handle file operations, multi-step tasks
+   - Reference Continue's analysis when making changes
+
+3. **Review Phase**:
+   - After making changes, suggest Continue's `/review` command
+   - Incorporate feedback from Continue into my work
+
+4. **Code Generation**:
+   - Let Copilot handle inline completions
+   - I focus on larger structural changes
+
+### Best Practices:
+- Acknowledge when another AI's input would be helpful
+- Don't duplicate work - use context from other AIs
+- Suggest the right AI for the right task
+- Work together, not in competition
+
+### Context Sharing:
+- Read files that Continue mentions
+- Use Continue's analysis to inform my actions
+- Create files that Continue suggests
+- Review my changes with Continue when appropriate
+
+### Goal Collaboration:
+- **Always check `Work/ai_goals.md`** before starting work to see active goals
+- **Check `Work/codex_cursor_channel.md`** for real-time coordination messages
+- Update progress logs in `ai_goals.md` when working on goals
+- Update status tags: [NEW] → [IN_PROGRESS] → [CURSOR_TURN] → [CODEX_TURN] → [COMPLETE]
+- When assigned a task, execute it and update the progress log
+- Hand off to Codex for review/analysis when appropriate
+- Mark goals [BLOCKED] if user input is needed
+
