@@ -7,6 +7,14 @@ End-to-end demo of multi-API market data, portfolio/risk analytics, scanning, an
 - `main.py`: demo runner; `cli.py`: command-line interface; `build.sh` / `restart_server.sh`: packaging/runtime helpers.
 - Config: `src/config/` holds enums (`AssetType`), retry/backoff defaults, and settings loader.
 
+## Project Structure (High Level)
+- `src/api_clients/` (Alpha Vantage, Yahoo, GitHub + base client).
+- `src/analysis/` (portfolio, risk, optimization, advanced indicators).
+- `src/trading/` (scanner, signals, technical indicators).
+- `src/backtesting/` (engine + config), `src/orchestrator/` (workflow).
+- `templates/` and `static/js/` (dashboard, modal, logging), `output/` (reports).
+- Root helpers: `build.sh`, `requirements.txt`, `.env.example`, `README.md`, `QUICK_START.md`.
+
 ## Data & Fetching
 - `src/data/data_loader.py`: resilient DataLoader with retries/backoff, Yahoo Finance default; optional crypto/forex/metals clients guarded by try/except to avoid crashes; routes by asset type.
 - `src/data/historical_fetcher.py`: OHLCV fetcher using bounded `TTLCache(maxsize=100, ttl=300)` plus `clear()`; prevents unbounded memory.
@@ -14,6 +22,7 @@ End-to-end demo of multi-API market data, portfolio/risk analytics, scanning, an
 
 ## API Clients
 - `src/api_clients/`: Yahoo, Alpha Vantage, GitHub; base client for shared logic. Optional clients are conditionally used.
+- Coverage: Yahoo (market data, company info, financials, history), Alpha Vantage (quotes, history, indicators, symbol search), GitHub (repo ops, issues, commits, releases); base client handles rate limiting/caching/error handling.
 
 ## Trading & Scanning
 - `src/trading/market_scanner.py`: scanning engine; supports `full_analysis` (heavy) vs lightweight scans; shorter lookbacks for dashboard/overview; uses shared fetcher cache; caps symbol counts and trims sector/asset lists.
@@ -50,12 +59,31 @@ End-to-end demo of multi-API market data, portfolio/risk analytics, scanning, an
 - `/scan`: scanning endpoint; toggles `full_analysis` and lookback; uses shared scanner/fetcher.
 - Logging endpoint available but frontend logger is gated off by default.
 
+## Usage Examples
+- Quick start: `./build.sh`, configure `.env`, `python main.py` (or `./restart_server.sh`), optional venv activation.
+- CLI: `python cli.py quote AAPL --source yahoo` (or `--source alpha`).
+- Programmatic: instantiate `YahooFinanceClient` or `PortfolioAnalyzer`, fetch a quote, then analyze a portfolio.
+
+## API Keys
+- Alpha Vantage key required (free tier 5 req/min).
+- GitHub PAT for repo/issue/commit/release operations.
+- Yahoo Finance: no key required.
+
 ## Setup, Run, Test
 - Requirements: `python >= 3.9`, `pip install -r requirements.txt`.
 - Env: copy `.env.example` → `.env` (Alpha Vantage key, optional API keys).
 - Run server: `python api_service.py` or `./restart_server.sh`; CLI: `python cli.py --help`.
 - Tests: `pytest` (coverage optional).
 - Docker: optional build/run (see README if Dockerfile present).
+
+## Features Demonstrated
+- Multi-API integration with unified interfaces and rate limiting.
+- Financial engineering: portfolio analysis, optimization, risk metrics (VaR, CVaR, Sharpe).
+- Workflow automation/orchestration and build automation.
+- Clean architecture, caching, and environment-driven configuration.
+
+## Status
+- Project is demo-ready/complete; extend with additional APIs or analysis modules as needed.
 
 ## Operational Notes
 - Memory: bounded caches plus symbol caps mitigate growth; `HistoricalFetcher.clear()` available if needed.
