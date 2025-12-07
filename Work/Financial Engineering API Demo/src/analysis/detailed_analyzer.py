@@ -91,7 +91,9 @@ class DetailedAnalyzer:
             # Fallback: use returns-based volatility as percentage
             atr = current_price * (returns.std() * np.sqrt(252) * 0.02)  # Conservative estimate
         
-        logger.info(f"Price calculation for {symbol}: current_price=${current_price:.2f}, ATR=${atr:.2f} ({(atr/current_price)*100:.1f}% of price)")
+        # Calculate ATR percentage safely for logging
+        atr_pct_for_log = (atr / current_price * 100) if current_price > 0 else 0.0
+        logger.info(f"Price calculation for {symbol}: current_price=${current_price:.2f}, ATR=${atr:.2f} ({atr_pct_for_log:.1f}% of price)")
         
         # Apply percentage caps to ATR
         atr_pct = (atr / current_price) if current_price > 0 else 0.02
