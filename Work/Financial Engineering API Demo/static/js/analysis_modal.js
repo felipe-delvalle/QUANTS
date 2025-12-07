@@ -87,13 +87,26 @@ function showAnalysisModal(symbol, data, signalType = null) {
     
     updateModalContent(analysis);
     
-    // Update price change from analysis if available
-    if (analysis.current_price && modalChange) {
-      // Calculate change if we have previous price data, otherwise keep loading state
-      const changeText = modalChange.textContent;
-      if (changeText === 'Loading...' && analysis.recommendation) {
-        // Use a default or calculate from historical if available
-        modalChange.textContent = '0.0%';
+    // Update price and price change from analysis if available
+    if (analysis.current_price) {
+      // Update the displayed price with the real-time price from analysis
+      if (modalPrice) {
+        modalPrice.textContent = `$${analysis.current_price.toFixed(2)}`;
+        logger.info('modal', 'price_updated_from_analysis', {
+          symbol: symbol,
+          old_price: data.current_price,
+          new_price: analysis.current_price
+        });
+      }
+      
+      // Update price change if available
+      if (modalChange) {
+        // Calculate change if we have previous price data, otherwise keep loading state
+        const changeText = modalChange.textContent;
+        if (changeText === 'Loading...' && analysis.recommendation) {
+          // Use a default or calculate from historical if available
+          modalChange.textContent = '0.0%';
+        }
       }
     }
     
@@ -212,52 +225,134 @@ async function fetchDetailedAnalysis(symbol, signalType = null) {
 
 // Update modal content with analysis data
 function updateModalContent(analysis) {
-  // Update overview tab
-  updateOverviewTab(analysis.recommendation);
-  
-  // Update technical indicators
-  updateTechnicalIndicators(analysis.technical_analysis);
-  
-  // Update risk analysis
-  updateRiskAnalysis(analysis.risk_analysis);
-  
-  // Update historical performance
-  updateHistoricalPerformance(analysis.historical_performance);
+  try {
+    // Update overview tab
+    if (analysis.recommendation) {
+      updateOverviewTab(analysis.recommendation);
+    }
+    
+    // Update technical indicators
+    if (analysis.technical_analysis) {
+      updateTechnicalIndicators(analysis.technical_analysis);
+    }
+    
+    // Update risk analysis
+    if (analysis.risk_analysis) {
+      updateRiskAnalysis(analysis.risk_analysis);
+    }
+    
+    // Update historical performance
+    if (analysis.historical_performance) {
+      updateHistoricalPerformance(analysis.historical_performance);
+    }
+  } catch (error) {
+    console.error('Error updating modal content:', error);
+    const logger = window.clientLogger || { error: () => {} };
+    logger.error('modal', 'update_modal_content_error', {
+      error: error.message,
+      analysis_keys: analysis ? Object.keys(analysis) : []
+    });
+  }
 }
 
 // Update overview tab
 function updateOverviewTab(recommendation) {
-  // Recommendation
-  const rating = document.getElementById('recRating');
-  rating.textContent = recommendation.recommendation;
-  rating.className = `rec-rating ${recommendation.action === 'BUY' ? 'positive' : recommendation.action === 'SELL' ? 'negative' : ''}`;
-  
-  // Confidence
-  const confidence = recommendation.confidence * 100;
-  document.getElementById('confidenceFill').style.width = `${confidence}%`;
-  document.getElementById('confidenceValue').textContent = `${confidence.toFixed(0)}%`;
-  
-  // Entry and targets
-  document.getElementById('entryRange').textContent = recommendation.entry_range;
-  document.getElementById('stopLoss').textContent = recommendation.stop_loss;
-  document.getElementById('target1').textContent = recommendation.targets[0];
-  document.getElementById('target2').textContent = recommendation.targets[1];
-  
-  // Professional analysis text
-  const analysisText = generateProfessionalAnalysis(recommendation);
-  document.getElementById('analysisText').textContent = analysisText;
+  try {
+    if (!recommendation) {
+      console.warn('Recommendation data missing');
+      return;
+    }
+    
+    // Recommendation
+    const rating = document.getElementById('recRating');
+    if (rating && recommendation.recommendation) {
+      rating.textContent = recommendation.recommendation;
+      rating.className = `rec-rating ${recommendation.action === 'BUY' ? 'positive' : recommendation.action === 'SELL' ? 'negative' : ''}`;
+    }
+    
+    // Confidence
+    if (recommendation.confidence !== undefined) {
+      const confidence = recommendation.confidence * 100;
+      const confidenceFill = document.getElementById('confidenceFill');
+      const confidenceValue = document.getElementById('confidenceValue');
+      if (confidenceFill) {
+        confidenceFill.style.width = `${confidence}%`;
+      }
+      if (confidenceValue) {
+        confidenceValue.textContent = `${confidence.toFixed(0)}%`;
+      }
+    }
+    
+    // Entry and targets
+    const entryRange = document.getElementById('entryRange');
+    const stopLoss = document.getElementById('stopLoss');
+    const target1 = document.getElementById('target1');
+    const target2 = document.getElementById('target2');
+    
+    if (entryRange && recommendation.entry_range) {
+      entryRange.textContent = recommendation.entry_range;
+    }
+    if (stopLoss && recommendation.stop_loss) {
+      stopLoss.textContent = recommendation.stop_loss;
+    }
+    if (target1 && recommendation.targets && recommendation.targets[0]) {
+      target1.textContent = recommendation.targets[0];
+    }
+    if (target2 && recommendation.targets && recommendation.targets[1]) {
+      target2.textContent = recommendation.targets[1];
+    }
+    
+    // Professional analysis text
+    const analysisTextEl = document.getElementById('analysisText');
+    if (analysisTextEl) {
+      try {
+        const analysisText = generateProfessionalAnalysis(recommendation);
+        analysisTextEl.textContent = analysisText;
+      } catch (genError) {
+        console.error('Error generating analysis text:', genError);
+        analysisTextEl.textContent = 'Analysis data available.';
+      }
+    }
+  } catch (error) {
+    console.error('Error updating overview tab:', error);
+  }
 }
 
 // Update technical indicators
 function updateTechnicalIndicators(technical) {
-  // RSI
-  document.getElementById('rsiValue').textContent = technical.indicators.rsi.value.toFixed(1);
-  document.getElementById('rsiSignal').textContent = technical.indicators.rsi.signal;
-  document.getElementById('rsiSignal').className = `signal ${technical.indicators.rsi.signal === 'oversold' ? 'positive' : technical.indicators.rsi.signal === 'overbought' ? 'negative' : ''}`;
-  
-  // MACD
-  document.getElementById('macdValue').textContent = technical.indicators.macd.signal;
-  document.getElementById('macdSignal').className = `signal ${technical.indicators.macd.signal === 'bullish' ? 'positive' : 'negative'}`;
+  try {
+    if (!technical || !technical.indicators) {
+      console.warn('Technical analysis data missing or incomplete');
+      return;
+    }
+    
+    // RSI
+    if (technical.indicators.rsi) {
+      const rsiValue = document.getElementById('rsiValue');
+      const rsiSignal = document.getElementById('rsiSignal');
+      if (rsiValue) {
+        rsiValue.textContent = technical.indicators.rsi.value.toFixed(1);
+      }
+      if (rsiSignal) {
+        rsiSignal.textContent = technical.indicators.rsi.signal;
+        rsiSignal.className = `signal ${technical.indicators.rsi.signal === 'oversold' ? 'positive' : technical.indicators.rsi.signal === 'overbought' ? 'negative' : ''}`;
+      }
+    }
+    
+    // MACD
+    if (technical.indicators.macd) {
+      const macdValue = document.getElementById('macdValue');
+      const macdSignal = document.getElementById('macdSignal');
+      if (macdValue) {
+        macdValue.textContent = technical.indicators.macd.signal;
+      }
+      if (macdSignal) {
+        macdSignal.className = `signal ${technical.indicators.macd.signal === 'bullish' ? 'positive' : 'negative'}`;
+      }
+    }
+  } catch (error) {
+    console.error('Error updating technical indicators:', error);
+  }
 }
 
 // Initialize technical charts
