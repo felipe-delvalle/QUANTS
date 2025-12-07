@@ -59,13 +59,15 @@ class DetailedAnalyzer:
         max_drawdown = self._calculate_max_drawdown(closes)
         sharpe_ratio = (mean_return - 0.02) / volatility if volatility > 0 else 0
         
+        # Calculate recent returns (always needed for trend_strength calculation)
+        recent_returns = returns.tail(20).mean() if len(returns) >= 20 else returns.mean()
+        
         # Determine recommendation
         if signal_type:
             action = signal_type.upper()
             recommendation_text = action
         else:
             # Simple logic based on recent trend
-            recent_returns = returns.tail(20).mean() if len(returns) >= 20 else returns.mean()
             if recent_returns > 0.001:
                 action = "BUY"
                 recommendation_text = "Buy"
