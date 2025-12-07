@@ -3,3 +3,5 @@ venv/
 **/venv/
 *.pyc
 __pycache__/
+.cursor/debug.log
+.cursor/chat_backups/

@@ -30,6 +30,7 @@ from src.data.historical_fetcher import HistoricalFetcher
 from src.analysis import DetailedAnalyzer, ReportGenerator
 from src.analysis.advanced_indicators import AdvancedIndicators
 from src.backtesting import BacktestEngine
+from src.api_clients.yahoo_finance import YahooFinanceClient
 
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
@@ -324,8 +325,16 @@ def get_detailed_analysis(symbol: str, signal_type: Optional[str] = None):
         if historical_data is None or len(historical_data) < 50:
             raise HTTPException(status_code=404, detail=f"Insufficient data for {symbol}")
         
-        # Get current price
-        current_price = float(historical_data["close"].iloc[-1])
+        # Get current price - use real-time quote instead of stale historical data
+        try:
+            yahoo_client = YahooFinanceClient()
+            quote = yahoo_client.get_quote(symbol)
+            current_price = float(quote["price"])
+            logger.info(f"Fetched real-time price for {symbol}: ${current_price:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch real-time price for {symbol}, using historical close: {e}")
+            # Fallback to historical data if quote fetch fails
+            current_price = float(historical_data["close"].iloc[-1])
         
         # Generate comprehensive analysis
         analysis = analyzer.generate_comprehensive_analysis(
@@ -406,23 +415,33 @@ def get_historical_data(
         
         # Add indicators if requested
         if indicators and len(data) > 50:
-            from ..trading.technical_indicators import TechnicalAnalyzer
-            
-            analyzer = TechnicalAnalyzer(data["close"])
-            analyzer.set_ohlcv(high=data["high"], low=data["low"], volume=data.get("volume"))
-            
-            analysis = analyzer.comprehensive_analysis()
-            
-            # Convert series to dict for JSON serialization
-            result["indicators"] = {
-                "sma_20": analysis["moving_averages"]["ma_20"].to_dict() if "ma_20" in analysis["moving_averages"] else {},
-                "sma_50": analysis["moving_averages"]["ma_50"].to_dict() if "ma_50" in analysis["moving_averages"] else {},
-                "rsi": {"current": analysis.get("current_rsi", 50)},
-                "macd": {
-                    "macd": analysis["macd"]["macd"].tail(100).to_dict() if "macd" in analysis["macd"] else {},
-                    "signal": analysis["macd"]["signal"].tail(100).to_dict() if "signal" in analysis["macd"] else {}
+            try:
+                from src.trading.technical_indicators import TechnicalAnalyzer
+                
+                analyzer = TechnicalAnalyzer(data["close"])
+                analyzer.set_ohlcv(high=data["high"], low=data["low"], volume=data.get("volume"))
+                
+                analysis = analyzer.comprehensive_analysis()
+                
+                # Convert series to dict for JSON serialization
+                result["indicators"] = {
+                    "sma_20": analysis["moving_averages"]["ma_20"].to_dict() if "ma_20" in analysis.get("moving_averages", {}) else {},
+                    "sma_50": analysis["moving_averages"]["ma_50"].to_dict() if "ma_50" in analysis.get("moving_averages", {}) else {},
+                    "rsi": {"current": analysis.get("current_rsi", 50)},
+                    "macd": {
+                        "macd": analysis["macd"]["macd"].tail(100).to_dict() if "macd" in analysis.get("macd", {}) else {},
+                        "signal": analysis["macd"]["signal"].tail(100).to_dict() if "signal" in analysis.get("macd", {}) else {}
+                    }
                 }
-            }
+            except Exception as indicator_error:
+                logger.error(f"Error calculating indicators for {symbol}: {indicator_error}", exc_info=True)
+                # Return basic structure without indicators rather than failing completely
+                result["indicators"] = {
+                    "sma_20": {},
+                    "sma_50": {},
+                    "rsi": {"current": 50},
+                    "macd": {"macd": {}, "signal": {}}
+                }
         
         # Add signal history
         performance = fetcher.get_signal_performance(symbol, lookback_days=365)
@@ -497,7 +516,13 @@ def scan_sector(
 
 
 @app.get("/api/market/overview")
-def market_overview():
+def market_overview(
+    request: Request,
+    threshold: float = Query(0.2, description="Threshold for opportunities"),
+    demo: bool = Query(False, description="Demo mode flag"),
+    sectors: Optional[str] = Query(None, description="Comma-separated list of sectors"),
+    asset_types: Optional[str] = Query(None, description="Comma-separated list of asset types")
+):
     """
     Get market overview with top opportunities across all sectors
     """
@@ -984,8 +1009,16 @@ def generate_pdf_report(symbol: str, signal_type: Optional[str] = None):
             # #endregion agent log
             raise HTTPException(status_code=404, detail=f"Insufficient data for {symbol}")
         
-        # Get current price
-        current_price = float(historical_data["close"].iloc[-1])
+        # Get current price - use real-time quote instead of stale historical data
+        try:
+            yahoo_client = YahooFinanceClient()
+            quote = yahoo_client.get_quote(symbol)
+            current_price = float(quote["price"])
+            logger.info(f"Fetched real-time price for {symbol}: ${current_price:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch real-time price for {symbol}, using historical close: {e}")
+            # Fallback to historical data if quote fetch fails
+            current_price = float(historical_data["close"].iloc[-1])
         
         # #region agent log
         try:

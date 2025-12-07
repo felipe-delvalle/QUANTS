@@ -59,13 +59,15 @@ class DetailedAnalyzer:
         max_drawdown = self._calculate_max_drawdown(closes)
         sharpe_ratio = (mean_return - 0.02) / volatility if volatility > 0 else 0
         
+        # Calculate recent returns (always needed for trend_strength calculation)
+        recent_returns = returns.tail(20).mean() if len(returns) >= 20 else returns.mean()
+        
         # Determine recommendation
         if signal_type:
             action = signal_type.upper()
             recommendation_text = action
         else:
             # Simple logic based on recent trend
-            recent_returns = returns.tail(20).mean() if len(returns) >= 20 else returns.mean()
             if recent_returns > 0.001:
                 action = "BUY"
                 recommendation_text = "Buy"
@@ -80,31 +82,63 @@ class DetailedAnalyzer:
         trend_strength = abs(recent_returns) if len(returns) >= 20 else 0.5
         confidence = min(0.95, max(0.5, trend_strength * 10 + 0.5))
         
-        # Calculate entry range and targets based on signal direction
-        price_std = closes.std()
-        entry_min = current_price - price_std * 0.5
-        entry_max = current_price + price_std * 0.5
+        # Calculate ATR for volatility measure (more appropriate than price std dev)
+        if 'high' in historical_data.columns and 'low' in historical_data.columns:
+            high = historical_data['high']
+            low = historical_data['low']
+            atr = self._calculate_atr(high, low, closes, period=14)
+        else:
+            # Fallback: use returns-based volatility as percentage
+            atr = current_price * (returns.std() * np.sqrt(252) * 0.02)  # Conservative estimate
+        
+        # Calculate ATR percentage safely for logging
+        atr_pct_for_log = (atr / current_price * 100) if current_price > 0 else 0.0
+        logger.info(f"Price calculation for {symbol}: current_price=${current_price:.2f}, ATR=${atr:.2f} ({atr_pct_for_log:.1f}% of price)")
+        
+        # Apply percentage caps to ATR
+        atr_pct = (atr / current_price) if current_price > 0 else 0.02
+        # Cap ATR percentage between 1% and 10%
+        atr_pct = max(0.01, min(0.10, atr_pct))
+        
+        # Entry range: ±2-5% of current price
+        entry_pct = min(0.05, max(0.02, atr_pct * 2))
+        entry_min = current_price * (1 - entry_pct)
+        entry_max = current_price * (1 + entry_pct)
         entry_range = f"${entry_min:.2f}-${entry_max:.2f}"
         
-        # Calculate stop loss and targets based on signal type
+        # Calculate stop loss and targets with percentage caps
         if action == "BUY":
-            # For BUY: stop loss below, targets above
-            stop_loss = f"${current_price - price_std * 2:.2f}"
-            target1 = f"${current_price + price_std * 1.5:.2f}"
-            target2 = f"${current_price + price_std * 3:.2f}"
-            target3 = f"${current_price + price_std * 5:.2f}"
+            # Stop loss: 5-15% below current price
+            stop_loss_pct = min(0.15, max(0.05, atr_pct * 3))
+            stop_loss = current_price * (1 - stop_loss_pct)
+            
+            # Targets: 10%, 20%, 30% above current price
+            target1 = current_price * 1.10
+            target2 = current_price * 1.20
+            target3 = current_price * 1.30
         elif action == "SELL":
-            # For SELL: stop loss above, targets below
-            stop_loss = f"${current_price + price_std * 2:.2f}"
-            target1 = f"${current_price - price_std * 1.5:.2f}"
-            target2 = f"${current_price - price_std * 3:.2f}"
-            target3 = f"${current_price - price_std * 5:.2f}"
+            # Stop loss: 5-15% above current price
+            stop_loss_pct = min(0.15, max(0.05, atr_pct * 3))
+            stop_loss = current_price * (1 + stop_loss_pct)
+            
+            # Targets: 10%, 20%, 30% below current price
+            target1 = current_price * 0.90
+            target2 = current_price * 0.80
+            target3 = current_price * 0.70
         else:  # HOLD
-            # For HOLD: neutral range
-            stop_loss = f"${current_price - price_std * 1:.2f}"
-            target1 = f"${current_price + price_std * 1:.2f}"
-            target2 = f"${current_price + price_std * 2:.2f}"
-            target3 = f"${current_price + price_std * 3:.2f}"
+            # Neutral: smaller ranges
+            stop_loss = current_price * 0.95
+            target1 = current_price * 1.05
+            target2 = current_price * 1.10
+            target3 = current_price * 1.15
+        
+        # Format as strings
+        stop_loss = f"${stop_loss:.2f}"
+        target1 = f"${target1:.2f}"
+        target2 = f"${target2:.2f}"
+        target3 = f"${target3:.2f}"
+        
+        logger.info(f"Calculated for {symbol}: stop_loss={stop_loss}, targets=[{target1}, {target2}, {target3}]")
         
         # Calculate RSI
         rsi = self._calculate_rsi(closes, period=14)
@@ -199,6 +233,35 @@ class DetailedAnalyzer:
         rs = gain / loss
         rsi = 100 - (100 / (1 + rs))
         return rsi.fillna(50.0)
+    
+    def _calculate_atr(self, high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> float:
+        """
+        Calculate Average True Range (ATR) for volatility measure
+        
+        Args:
+            high: High prices series
+            low: Low prices series
+            close: Close prices series
+            period: ATR period (default 14)
+        
+        Returns:
+            ATR value as float
+        """
+        if len(high) < period + 1:
+            # Fallback: use simple price range if not enough data
+            return float((high - low).mean()) if len(high) > 0 else float(close.iloc[-1] * 0.02)
+        
+        # Calculate True Range
+        tr1 = high - low
+        tr2 = abs(high - close.shift())
+        tr3 = abs(low - close.shift())
+        
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        # Calculate ATR as moving average of True Range
+        atr = true_range.rolling(window=period).mean().iloc[-1]
+        
+        return float(atr) if not pd.isna(atr) else float((high - low).mean())
 
 
 class ReportGenerator:
