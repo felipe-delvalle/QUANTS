@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #0b1221; color: #e8edf6; }
+    h1 { color: #5de0e6; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin-top: 16px; }
+    .card { background: #111829; border: 1px solid #243047; padding: 14px; border-radius: 8px; }
+    .card h3 { margin: 0 0 8px 0; color: #5de0e6; }
+    .card a { color: #5de0e6; text-decoration: none; font-weight: bold; }
+    .card a:hover { text-decoration: underline; }
+    .method { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 8px; }
+    .get { background: #6be07b; color: #0b1221; }
+    .post { background: #5de0e6; color: #0b1221; }
+    .desc { color: #a0a8b8; font-size: 13px; margin-top: 4px; }
+    .footer { margin-top: 20px; font-size: 12px; color: #a0a8b8; }
+    .contact-section { background: #111829; border: 1px solid #243047; padding: 16px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+    .contact-section h2 { margin: 0; color: #5de0e6; font-size: 18px; }
+    .contact-links { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+    .contact-item { display: flex; flex-direction: column; gap: 6px; }
+    .contact-item.horizontal { flex-direction: row; align-items: center; gap: 10px; }
+    .contact-link { display: flex; align-items: center; gap: 8px; color: #e8edf6; text-decoration: none; padding: 8px 12px; background: #182035; border: 1px solid #243047; border-radius: 6px; transition: all 0.2s; }
+    .contact-link:hover { background: #243047; border-color: #5de0e6; color: #5de0e6; }
+    .contact-link .icon { font-size: 18px; }
+    .contact-link .text { font-size: 14px; }
+    .description { color: #a0a8b8; font-size: 15px; line-height: 1.6; margin-bottom: 24px; max-width: 800px; }
+    .contact-label { color: #5de0e6; font-size: 12px; font-weight: 600; letter-spacing: 0.5px; }
+    .contact-link { position: relative; }
+    .contact-link .tooltip { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 8px; padding: 6px 10px; background: #182035; border: 1px solid #5de0e6; border-radius: 4px; color: #5de0e6; font-size: 12px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 1000; }
+    .contact-link:hover .tooltip { opacity: 1; }
+    .contact-link .tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: #5de0e6; }
+    .email-popup { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: #111829; border: 2px solid #5de0e6; border-radius: 8px; padding: 24px; z-index: 10000; box-shadow: 0 4px 20px rgba(0,0,0,0.5); min-width: 300px; max-width: 400px; }
+    .email-popup h3 { margin: 0 0 16px 0; color: #5de0e6; }
+    .email-popup .email-display { background: #182035; padding: 12px; border-radius: 4px; margin: 12px 0; font-family: monospace; color: #e8edf6; word-break: break-all; }
+    .email-popup .actions { display: flex; gap: 10px; margin-top: 16px; }
+    .email-popup button { flex: 1; padding: 10px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: all 0.2s; }
+    .email-popup .btn-primary { background: #5de0e6; color: #0b1221; }
+    .email-popup .btn-primary:hover { background: #4bc4ca; }
+    .email-popup .btn-secondary { background: #243047; color: #e8edf6; }
+    .email-popup .btn-secondary:hover { background: #182035; }
+    .email-popup .close-btn { position: absolute; top: 8px; right: 8px; background: transparent; border: none; color: #a0a8b8; font-size: 20px; cursor: pointer; padding: 4px 8px; }
+    .email-popup .close-btn:hover { color: #e8edf6; }
+    .popup-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 9999; }
+    .notification { position: fixed; top: 20px; right: 20px; background: #6be07b; color: #0b1221; padding: 12px 20px; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 10001; animation: slideIn 0.3s ease-out; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    .notification.hide { animation: slideOut 0.3s ease-out forwards; }
+    @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <div class="contact-section">
+    <h2>Contact</h2>
+    <div class="contact-links">
+      <div class="contact-item">
+        <span class="contact-label">Write me an email @</span>
+        <a href="#" class="contact-link email-link" onclick="event.preventDefault(); showEmailPopup();" title="Click to copy email or open email client">
+          <span class="tooltip">Click to copy email or open email client</span>
+          <span class="icon">📧</span>
+          <span class="text">felipe@fdv-quants.com</span>
+        </a>
+      </div>
+      <div class="contact-item">
+        <span class="contact-label">Connect with me</span>
+        <a href="https://www.linkedin.com/in/felipe-del-valle-saragoni/" target="_blank" rel="noopener noreferrer" class="contact-link">
+          <span class="icon">💼</span>
+          <span class="text">LinkedIn</span>
+        </a>
+      </div>
+    </div>
+  </div>
+  
+  <div class="description">
+    <p><strong>FDV-QUANTS</strong> is a premium financial engineering and trading platform offering advanced market analysis, signal generation, and backtesting capabilities. Our system scans multiple asset classes (stocks, cryptocurrencies, forex, and precious metals) to identify trading opportunities using sophisticated technical analysis and quantitative strategies.</p>
+    <p>Use the links below to explore our API endpoints and access the trading dashboard for real-time market insights.</p>
+  </div>
+
+  <div class="grid">
+    {% for ep in endpoints %}
+    <div class="card">
+      <span class="method {{ ep.method|lower }}">{{ ep.method }}</span>
+      {% if ep.method == 'GET' %}
+        <a href="{{ ep.path }}">{{ ep.path }}</a>
+      {% else %}
+        <span>{{ ep.path }}</span>
+      {% endif %}
+      <div class="desc">{{ ep.desc }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="footer">
+    Try: <code>http://127.0.0.1:8000/dashboard</code> for the opportunities dashboard or <code>/gallery</code> for charts.
+  </div>
+  <!-- Email Popup -->
+  <div id="emailPopup" class="email-popup" style="display: none;">
+    <button class="close-btn" onclick="closeEmailPopup()">×</button>
+    <h3>📧 Contact Email</h3>
+    <div class="email-display" id="emailDisplay">felipe@fdv-quants.com</div>
+    <div class="actions">
+      <button class="btn-primary" onclick="copyEmailToClipboard()">📋 Copy Email</button>
+      <button class="btn-secondary" onclick="openEmailClient()">✉️ Open Email Client</button>
+    </div>
+  </div>
+  <div id="popupOverlay" class="popup-overlay" style="display: none;" onclick="closeEmailPopup()"></div>
+  
+  <script>
+    function showEmailPopup() {
+      document.getElementById('emailPopup').style.display = 'block';
+      document.getElementById('popupOverlay').style.display = 'block';
+    }
+    
+    function closeEmailPopup() {
+      document.getElementById('emailPopup').style.display = 'none';
+      document.getElementById('popupOverlay').style.display = 'none';
+    }
+    
+    function copyEmailToClipboard() {
+      const email = 'felipe@fdv-quants.com';
+      navigator.clipboard.writeText(email).then(() => {
+        showNotification('✓ Email copied to clipboard!');
+        closeEmailPopup();
+      }).catch(err => {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = email;
+        textArea.style.position = 'fixed';
+        textArea.style.opacity = '0';
+        document.body.appendChild(textArea);
+        textArea.select();
+        try {
+          document.execCommand('copy');
+          showNotification('✓ Email copied to clipboard!');
+          closeEmailPopup();
+        } catch (err) {
+          showNotification('✗ Failed to copy. Please copy manually.');
+        }
+        document.body.removeChild(textArea);
+      });
+    }
+    
+    function openEmailClient() {
+      window.location.href = 'mailto:felipe@fdv-quants.com';
+      showNotification('Opening email client...');
+      closeEmailPopup();
+    }
+    
+    function showNotification(message) {
+      // Remove existing notification if any
+      const existing = document.getElementById('notification');
+      if (existing) {
+        existing.remove();
+      }
+      
+      const notification = document.createElement('div');
+      notification.id = 'notification';
+      notification.className = 'notification';
+      notification.textContent = message;
+      document.body.appendChild(notification);
+      
+      setTimeout(() => {
+        notification.classList.add('hide');
+        setTimeout(() => notification.remove(), 300);
+      }, 2000);
+    }
+    
+    // Close popup on Escape key
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') {
+        closeEmailPopup();
+      }
+    });
+  </script>
+</body>
+</html>
