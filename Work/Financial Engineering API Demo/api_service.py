@@ -30,6 +30,7 @@ from src.data.historical_fetcher import HistoricalFetcher
 from src.analysis import DetailedAnalyzer, ReportGenerator
 from src.analysis.advanced_indicators import AdvancedIndicators
 from src.backtesting import BacktestEngine
+from src.api_clients.yahoo_finance import YahooFinanceClient
 
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
@@ -324,8 +325,16 @@ def get_detailed_analysis(symbol: str, signal_type: Optional[str] = None):
         if historical_data is None or len(historical_data) < 50:
             raise HTTPException(status_code=404, detail=f"Insufficient data for {symbol}")
         
-        # Get current price
-        current_price = float(historical_data["close"].iloc[-1])
+        # Get current price - use real-time quote instead of stale historical data
+        try:
+            yahoo_client = YahooFinanceClient()
+            quote = yahoo_client.get_quote(symbol)
+            current_price = float(quote["price"])
+            logger.info(f"Fetched real-time price for {symbol}: ${current_price:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch real-time price for {symbol}, using historical close: {e}")
+            # Fallback to historical data if quote fetch fails
+            current_price = float(historical_data["close"].iloc[-1])
         
         # Generate comprehensive analysis
         analysis = analyzer.generate_comprehensive_analysis(
@@ -1000,8 +1009,16 @@ def generate_pdf_report(symbol: str, signal_type: Optional[str] = None):
             # #endregion agent log
             raise HTTPException(status_code=404, detail=f"Insufficient data for {symbol}")
         
-        # Get current price
-        current_price = float(historical_data["close"].iloc[-1])
+        # Get current price - use real-time quote instead of stale historical data
+        try:
+            yahoo_client = YahooFinanceClient()
+            quote = yahoo_client.get_quote(symbol)
+            current_price = float(quote["price"])
+            logger.info(f"Fetched real-time price for {symbol}: ${current_price:.2f}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch real-time price for {symbol}, using historical close: {e}")
+            # Fallback to historical data if quote fetch fails
+            current_price = float(historical_data["close"].iloc[-1])
         
         # #region agent log
         try:
