@@ -406,7 +406,7 @@ def get_historical_data(
         
         # Add indicators if requested
         if indicators and len(data) > 50:
-            from ..trading.technical_indicators import TechnicalAnalyzer
+            from src.trading.technical_indicators import TechnicalAnalyzer
             
             analyzer = TechnicalAnalyzer(data["close"])
             analyzer.set_ohlcv(high=data["high"], low=data["low"], volume=data.get("volume"))
