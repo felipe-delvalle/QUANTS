@@ -1,0 +1,11 @@
+# Files to exclude from Continue indexing
+**/__pycache__/
+**/*.pyc
+**/.DS_Store
+**/node_modules/
+**/*.pdf
+**/*.zip
+**/.git/
+**/archive/
+**/.qodo/
+
