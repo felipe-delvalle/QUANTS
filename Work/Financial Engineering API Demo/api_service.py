@@ -497,7 +497,13 @@ def scan_sector(
 
 
 @app.get("/api/market/overview")
-def market_overview():
+def market_overview(
+    request: Request,
+    threshold: float = Query(0.2, description="Threshold for opportunities"),
+    demo: bool = Query(False, description="Demo mode flag"),
+    sectors: Optional[str] = Query(None, description="Comma-separated list of sectors"),
+    asset_types: Optional[str] = Query(None, description="Comma-separated list of asset types")
+):
     """
     Get market overview with top opportunities across all sectors
     """
