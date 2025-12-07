@@ -27,7 +27,7 @@ DEFAULT_BATCH_SIZE = 50  # Batch size for quote fetching
 class MarketScanner:
     """Scans markets for trading opportunities"""
     
-    def __init__(self, data_loader=None, max_workers: int = DEFAULT_MAX_WORKERS):
+    def __init__(self, data_loader=None, historical_fetcher=None, max_workers: int = DEFAULT_MAX_WORKERS):
         """
         Initialize market scanner
         
@@ -37,7 +37,7 @@ class MarketScanner:
         """
         self.data_loader = data_loader if data_loader is not None else DataLoader()
         self.yahoo_client = YahooFinanceClient()
-        self.historical_fetcher = HistoricalFetcher()
+        self.historical_fetcher = historical_fetcher if historical_fetcher is not None else HistoricalFetcher()
         self.analyzer = DetailedAnalyzer(self.data_loader)
         self.max_workers = max_workers
     
@@ -48,7 +48,9 @@ class MarketScanner:
         min_confidence: float,
         asset_type: str,
         current_price: Optional[float] = None,
-        historical_data: Optional[pd.DataFrame] = None
+        historical_data: Optional[pd.DataFrame] = None,
+        full_analysis: bool = True,
+        historical_years: float = 1.0
     ) -> Optional[Dict[str, Any]]:
         """
         Process a single symbol to generate opportunity data
@@ -60,6 +62,8 @@ class MarketScanner:
             asset_type: Asset type string
             current_price: Pre-fetched price (optional, will fetch if None)
             historical_data: Pre-fetched historical data (optional, will fetch if None)
+            full_analysis: Whether to run the heavyweight DetailedAnalyzer path
+            historical_years: Years of history to fetch (lower for lightweight scans)
             
         Returns:
             Opportunity dictionary or None if filtered out
@@ -93,7 +97,7 @@ class MarketScanner:
             if historical_data is None:
                 try:
                     historical_data = self.historical_fetcher.fetch_historical_data(
-                        symbol, asset_type_enum, years=1, use_cache=True
+                        symbol, asset_type_enum, years=historical_years, use_cache=True
                     )
                 except Exception as hist_fetch_error:
                     logger.warning(f"Failed to fetch historical data for {symbol}: {hist_fetch_error}")
@@ -101,13 +105,36 @@ class MarketScanner:
             
             # Early filtering: Skip expensive analysis if we don't have enough data
             try:
-                if historical_data is None or len(historical_data) < 50:
-                    logger.warning(f"Insufficient historical data for {symbol}, using basic analysis")
-                    # Use basic analysis with just price
+                if not full_analysis:
+                    # Lightweight path for dashboards: avoid full analyzer
+                    closes = None
+                    if historical_data is not None and len(historical_data) > 0:
+                        closes = historical_data["close"] if "close" in historical_data.columns else historical_data.iloc[:, 0]
+                    
                     signal = "HOLD"
-                    confidence = 0.5
                     trend = "neutral"
-                    reasons = ["Insufficient data for full analysis"]
+                    reasons = ["Quick scan"]
+                    confidence = 0.55
+                    
+                    if closes is not None and len(closes) >= 20:
+                        short_ma = closes.tail(20).mean()
+                        long_ma = closes.tail(50).mean() if len(closes) >= 50 else closes.mean()
+                        ma_gap = abs(short_ma - long_ma) / long_ma if long_ma else 0
+                        
+                        if current_price > short_ma and short_ma >= long_ma:
+                            signal = "BUY"
+                            trend = "uptrend"
+                            reasons = ["Price above short-term trend", "Momentum improving"]
+                        elif current_price < short_ma and short_ma <= long_ma:
+                            signal = "SELL"
+                            trend = "downtrend"
+                            reasons = ["Price below short-term trend", "Momentum weakening"]
+                        else:
+                            reasons = ["Range-bound price action"]
+                        
+                        confidence = min(0.85, max(0.5, 0.55 + ma_gap))
+                    else:
+                        reasons = ["Quick scan with limited history"]
                 else:
                     # Generate comprehensive analysis
                     analysis = self.analyzer.generate_comprehensive_analysis(
@@ -196,7 +223,10 @@ class MarketScanner:
         symbols: List[str],
         min_confidence: float = 0.5,
         asset_type: str = "stock",
-        period: str = "6mo"
+        period: str = "6mo",
+        strategy: Optional[str] = None,
+        full_analysis: bool = True,
+        historical_years: float = 1.0
     ) -> List[Dict[str, Any]]:
         """
         Scan stocks for trading opportunities using parallel processing and batch fetching
@@ -206,6 +236,8 @@ class MarketScanner:
             min_confidence: Minimum confidence threshold
             asset_type: Asset type (stock, crypto, forex, commodities)
             period: Time period for analysis
+            full_analysis: Whether to run the heavyweight DetailedAnalyzer path
+            historical_years: Years of history to fetch for analysis
             
         Returns:
             List of opportunity dictionaries with real prices and analysis
@@ -259,7 +291,7 @@ class MarketScanner:
         historical_data_map = {}
         try:
             historical_data_map = self.historical_fetcher.fetch_historical_data_batch(
-                symbols, asset_type_enum, years=1, use_cache=True
+                symbols, asset_type_enum, years=historical_years, use_cache=True
             )
             hist_elapsed = time.time() - hist_start
             valid_data_count = sum(1 for v in historical_data_map.values() if v is not None and len(v) >= 50)
@@ -282,7 +314,9 @@ class MarketScanner:
                     min_confidence,
                     asset_type,
                     price_data.get(symbol, {}).get("price") if price_data.get(symbol) else None,
-                    historical_data_map.get(symbol)
+                    historical_data_map.get(symbol),
+                    full_analysis,
+                    historical_years
                 ): symbol
                 for symbol in symbols
             }
@@ -345,10 +379,11 @@ class MarketScanner:
             opportunities = self.scan_stocks(
                 symbols=symbols,
                 min_confidence=min_confidence,
-                asset_type="stock"
+                asset_type="stock",
+                full_analysis=False,
+                historical_years=0.5
             )
             
             results[sector.value] = opportunities[:limit_per_sector]
         
         return results
-

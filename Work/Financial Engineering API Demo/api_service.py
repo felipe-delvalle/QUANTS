@@ -31,6 +31,7 @@ from src.analysis import DetailedAnalyzer, ReportGenerator
 from src.analysis.advanced_indicators import AdvancedIndicators
 from src.backtesting import BacktestEngine
 from src.api_clients.yahoo_finance import YahooFinanceClient
+import pandas as pd
 
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
@@ -49,7 +50,12 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 rate_limiter = TTLCache(maxsize=512, ttl=60)
 
 # Dashboard result caching (5 minute TTL)
-dashboard_cache = TTLCache(maxsize=128, ttl=300)
+dashboard_cache = TTLCache(maxsize=64, ttl=300)
+
+# Shared data loader and scanners to reuse caches across requests
+shared_loader = DataLoader()
+shared_historical_fetcher = HistoricalFetcher()
+shared_scanner = MarketScanner(data_loader=shared_loader, historical_fetcher=shared_historical_fetcher)
 
 
 def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_types: Optional[str], demo: bool) -> str:
@@ -99,14 +105,14 @@ def scan(req: ScanRequest, x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     check_rate_limit("scan")
 
-    loader = DataLoader()
-    scanner = MarketScanner(data_loader=loader)
-    opps = scanner.scan_stocks(
+    opps = shared_scanner.scan_stocks(
         req.symbols,
         min_confidence=req.min_confidence,
         strategy=req.strategy,
         asset_type=req.asset_type.value,
         period=req.period,
+        full_analysis=True,
+        historical_years=1.0
     )
     return {"count": len(opps), "opportunities": opps}
 
@@ -246,6 +252,13 @@ def _get_asset_type(symbol: str) -> AssetType:
     
     # Default to stock
     return AssetType.STOCK
+
+
+def series_to_dict(series: pd.Series) -> dict:
+    """Convert pandas Series to a JSON-safe dict, replacing NaN with None."""
+    if series is None or len(series) == 0:
+        return {}
+    return {str(k): (None if pd.isna(v) else float(v)) for k, v in series.items()}
 
 
 
@@ -423,14 +436,23 @@ def get_historical_data(
                 
                 analysis = analyzer.comprehensive_analysis()
                 
-                # Convert series to dict for JSON serialization
+                moving_averages = analysis.get("moving_averages", {}) if isinstance(analysis, dict) else {}
+                ma_20 = moving_averages.get("ma_20")
+                ma_50 = moving_averages.get("ma_50")
+                macd_data = analysis.get("macd", {}) if isinstance(analysis, dict) else {}
+                macd_series = macd_data.get("macd")
+                signal_series = macd_data.get("signal")
+                current_rsi = analysis.get("current_rsi", 50) if isinstance(analysis, dict) else 50
+                rsi_value = 50.0 if pd.isna(current_rsi) else float(current_rsi)
+
+                # Convert series to dict for JSON serialization (NaN -> None)
                 result["indicators"] = {
-                    "sma_20": analysis["moving_averages"]["ma_20"].to_dict() if "ma_20" in analysis.get("moving_averages", {}) else {},
-                    "sma_50": analysis["moving_averages"]["ma_50"].to_dict() if "ma_50" in analysis.get("moving_averages", {}) else {},
-                    "rsi": {"current": analysis.get("current_rsi", 50)},
+                    "sma_20": series_to_dict(ma_20) if ma_20 is not None else {},
+                    "sma_50": series_to_dict(ma_50) if ma_50 is not None else {},
+                    "rsi": {"current": rsi_value},
                     "macd": {
-                        "macd": analysis["macd"]["macd"].tail(100).to_dict() if "macd" in analysis.get("macd", {}) else {},
-                        "signal": analysis["macd"]["signal"].tail(100).to_dict() if "signal" in analysis.get("macd", {}) else {}
+                        "macd": series_to_dict(macd_series.tail(100)) if macd_series is not None else {},
+                        "signal": series_to_dict(signal_series.tail(100)) if signal_series is not None else {}
                     }
                 }
             except Exception as indicator_error:
@@ -486,12 +508,8 @@ def scan_sector(
         if not sector_enum:
             raise HTTPException(status_code=400, detail=f"Invalid sector: {sector}")
         
-        # Initialize scanner
-        loader = DataLoader()
-        scanner = MarketScanner(data_loader=loader)
-        
         # Scan sector
-        results = scanner.scan_by_sectors(
+        results = shared_scanner.scan_by_sectors(
             sectors=[sector_enum],
             min_confidence=min_confidence,
             strategy=strategy,
@@ -548,9 +566,6 @@ def market_overview(
                 },
             )
         
-        loader = DataLoader()
-        scanner = MarketScanner(data_loader=loader)
-        
         # Get top opportunities from each sector
         sector_opportunities = {}
         
@@ -558,10 +573,12 @@ def market_overview(
             # Get top 3 from each sector
             symbols = list(MARKET_SYMBOLS[sector])[:10]  # Scan top 10, return top 3
             
-            opportunities = scanner.scan_stocks(
+            opportunities = shared_scanner.scan_stocks(
                 symbols=symbols,
                 min_confidence=0.5,
-                asset_type=AssetType.STOCK.value
+                asset_type=AssetType.STOCK.value,
+                full_analysis=False,
+                historical_years=0.5
             )
             
             if opportunities:
@@ -569,20 +586,26 @@ def market_overview(
         
         # Get crypto, forex, commodities highlights
         other_opportunities = {
-            "crypto": scanner.scan_stocks(
+            "crypto": shared_scanner.scan_stocks(
                 symbols=CRYPTO_SYMBOLS[:5],
                 min_confidence=0.5,
-                asset_type=AssetType.CRYPTO.value
+                asset_type=AssetType.CRYPTO.value,
+                full_analysis=False,
+                historical_years=0.25
             )[:3],
-            "forex": scanner.scan_stocks(
+            "forex": shared_scanner.scan_stocks(
                 symbols=FOREX_PAIRS[:5],
                 min_confidence=0.5,
-                asset_type=AssetType.FOREX.value
+                asset_type=AssetType.FOREX.value,
+                full_analysis=False,
+                historical_years=0.25
             )[:3],
-            "commodities": scanner.scan_stocks(
+            "commodities": shared_scanner.scan_stocks(
                 symbols=COMMODITIES[:5],
                 min_confidence=0.5,
-                asset_type=AssetType.METAL.value
+                asset_type=AssetType.METAL.value,
+                full_analysis=False,
+                historical_years=0.25
             )[:3]
         }
         
@@ -641,9 +664,6 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
                 },
             )
         
-        loader = DataLoader()
-        scanner = MarketScanner(data_loader=loader)
-        
         # Build symbol list based on filters
         all_symbols = []
         
@@ -656,17 +676,17 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         else:
             # Default: use a subset of symbols from each sector
             for sector, symbols in MARKET_SYMBOLS.items():
-                all_symbols.extend(symbols[:3])  # Top 3 from each sector
+                all_symbols.extend(symbols[:2])  # Top 2 from each sector
         
         # Add additional asset types if selected
         if asset_types:
             selected_types = [t.strip() for t in asset_types.split(",")]
             if "crypto" in selected_types:
-                all_symbols.extend(CRYPTO_SYMBOLS[:10])  # Top 10 cryptos
+                all_symbols.extend(CRYPTO_SYMBOLS[:5])  # Top 5 cryptos
             if "forex" in selected_types:
-                all_symbols.extend(FOREX_PAIRS[:10])    # Top 10 forex pairs
+                all_symbols.extend(FOREX_PAIRS[:5])    # Top 5 forex pairs
             if "commodities" in selected_types:
-                all_symbols.extend(COMMODITIES[:8])     # Top 8 commodities
+                all_symbols.extend(COMMODITIES[:4])     # Top 4 commodities
         
         # Ensure threshold is valid (0.0 to 1.0)
         threshold = max(0.0, min(1.0, threshold))
@@ -692,22 +712,26 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
             try:
                 if demo:
                     # Demo mode: use scanner's scan_stocks but it will use sample data
-                    opps = scanner.scan_stocks(
+                    opps = shared_scanner.scan_stocks(
                         symbols,
                         min_confidence=threshold,
                         asset_type=asset_type_value,
-                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo"
+                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
+                        full_analysis=False,
+                        historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
                     )
                     all_opps.extend(opps)
                     asset_type_counts[asset_type_value] = len(opps)
                     logger.info(f"[DEMO] {asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
                 else:
                     # Normal mode: let scanner handle data fetching and fallback to sample data
-                    opps = scanner.scan_stocks(
+                    opps = shared_scanner.scan_stocks(
                         symbols,
                         min_confidence=threshold,
                         asset_type=asset_type_value,
-                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo"
+                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
+                        full_analysis=False,
+                        historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
                     )
                     all_opps.extend(opps)
                     asset_type_counts[asset_type_value] = len(opps)

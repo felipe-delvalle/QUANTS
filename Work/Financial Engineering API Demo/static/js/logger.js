@@ -9,8 +9,23 @@ class ClientLogger {
     this.flushInterval = 2000; // Flush logs every 2 seconds
     this.maxQueueSize = 50; // Max logs before forced flush
     this.flushTimer = null;
-    this.enabled = true;
+    
+    // Enable only when explicitly requested (localStorage flag or window.ENABLE_CLIENT_LOGGER)
+    const localEnabled = (() => {
+      try {
+        return localStorage.getItem('enableClientLogger') === 'true';
+      } catch (e) {
+        return false;
+      }
+    })();
+    const explicitEnable = typeof window !== 'undefined' && window.ENABLE_CLIENT_LOGGER === true;
+    this.enabled = explicitEnable || localEnabled;
     this.apiEndpoint = '/api/logs';
+    
+    if (!this.enabled) {
+      console.info('ClientLogger disabled (set localStorage.enableClientLogger=true or window.ENABLE_CLIENT_LOGGER=true to enable).');
+      return;
+    }
     
     // Start flush timer
     this.startFlushTimer();

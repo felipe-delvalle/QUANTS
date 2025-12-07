@@ -7,6 +7,7 @@ import logging
 from typing import Optional, List, Dict
 import pandas as pd
 from datetime import datetime, timedelta
+from cachetools import TTLCache
 
 try:
     import yfinance as yf
@@ -24,7 +25,7 @@ class HistoricalFetcher:
     
     def __init__(self):
         """Initialize historical fetcher"""
-        self.cache = {}
+        self.cache: TTLCache = TTLCache(maxsize=100, ttl=300)
     
     def fetch_historical_data(
         self,
@@ -98,6 +99,10 @@ class HistoricalFetcher:
         except Exception as e:
             logger.error(f"Error fetching historical data for {symbol}: {e}")
             return self._generate_sample_data(symbol, years)
+
+    def clear(self):
+        """Clear the historical data cache."""
+        self.cache.clear()
     
     def _generate_sample_data(self, symbol: str, years: float) -> pd.DataFrame:
         """Generate sample data for testing"""

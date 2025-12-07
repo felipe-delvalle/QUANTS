@@ -1,171 +1,63 @@
-# 📊 Financial Engineering API Demo - Project Summary
+# 📊 Financial Engineering API Demo – Comprehensive Summary
 
-## ✅ Project Complete!
+End-to-end demo of multi-API market data, portfolio/risk analytics, scanning, and a FastAPI dashboard with caching and lightweight vs. full analysis paths.
 
-A comprehensive financial engineering demonstration project with multi-API integration.
+## Architecture & Entrypoints
+- `api_service.py`: FastAPI app, dashboard/analysis endpoints, shared singleton-style `HistoricalFetcher` and `MarketScanner`, dashboard caching, NaN-safe JSON responses.
+- `main.py`: demo runner; `cli.py`: command-line interface; `build.sh` / `restart_server.sh`: packaging/runtime helpers.
+- Config: `src/config/` holds enums (`AssetType`), retry/backoff defaults, and settings loader.
 
-## 🎯 What Was Built
+## Data & Fetching
+- `src/data/data_loader.py`: resilient DataLoader with retries/backoff, Yahoo Finance default; optional crypto/forex/metals clients guarded by try/except to avoid crashes; routes by asset type.
+- `src/data/historical_fetcher.py`: OHLCV fetcher using bounded `TTLCache(maxsize=100, ttl=300)` plus `clear()`; prevents unbounded memory.
+- `src/data/__init__.py`: exports DataLoader from `data_loader.py` to keep imports aligned.
 
-### 1. **API Clients** (`src/api_clients/`)
-- ✅ **Alpha Vantage Client**: Real-time stock quotes, historical data, technical indicators
-- ✅ **Yahoo Finance Client**: Market data, company info, financial statements
-- ✅ **GitHub API Client**: Repository management, issues, commits, releases
-- ✅ **Base Client**: Common functionality (rate limiting, caching, error handling)
+## API Clients
+- `src/api_clients/`: Yahoo, Alpha Vantage, GitHub; base client for shared logic. Optional clients are conditionally used.
 
-### 2. **Analysis Engine** (`src/analysis/`)
-- ✅ **Portfolio Analyzer**: Portfolio performance, returns, correlation
-- ✅ **Risk Calculator**: VaR, CVaR, Beta, and other risk metrics
-- ✅ **Portfolio Optimizer**: Sharpe ratio optimization, weight allocation
+## Trading & Scanning
+- `src/trading/market_scanner.py`: scanning engine; supports `full_analysis` (heavy) vs lightweight scans; shorter lookbacks for dashboard/overview; uses shared fetcher cache; caps symbol counts and trims sector/asset lists.
+- `signal_generator.py`, `technical_indicators.py`: signal and indicator calculations supporting scans.
 
-### 3. **Workflow Orchestrator** (`src/orchestrator/`)
-- ✅ **Workflow Manager**: Coordinates multiple API calls
-- ✅ **Task Sequencing**: Automated workflow execution
-- ✅ **Error Handling**: Robust error management
+## Analysis Engine
+- `src/analysis/detailed_analyzer.py`: full per-symbol deep dive for modal requests.
+- `portfolio.py`, `risk_metrics.py`, `optimization.py`, `advanced_indicators.py`: portfolio analytics, risk metrics, optimization, and advanced factors.
 
-### 4. **Build System**
-- ✅ **Build Script**: Automated setup and installation
-- ✅ **Requirements**: All dependencies specified
-- ✅ **Environment Config**: `.env.example` template
-- ✅ **CLI Interface**: Command-line tools
+## Backtesting & Orchestration
+- `src/backtesting/backtest_engine.py` (+ config): historical strategy evaluation.
+- `src/orchestrator/workflow.py`: coordinates multi-step workflows across fetch → analysis → report.
 
-## 📁 Project Structure
+## Utilities & Support
+- `src/utils/`: `cache_manager.py` (TTL/LRU helpers), `pdf_generator.py`, misc helpers.
+- Scripts: `stop_server.sh`, `restart_server.sh`, server command references in `SERVER_COMMANDS.md`.
+- Output/docs: generated reports in `output/`; guides (`QUICK_START.md`, `CODE_REVIEW.md`, `PROJECT_SUMMARY.md` updated here).
 
-```
-Financial Engineering API Demo/
-├── src/
-│   ├── api_clients/          # API integration layer
-│   │   ├── base_client.py    # Base class with common features
-│   │   ├── alpha_vantage.py  # Alpha Vantage API
-│   │   ├── yahoo_finance.py  # Yahoo Finance API
-│   │   └── github_api.py     # GitHub API
-│   ├── analysis/             # Financial analysis
-│   │   ├── portfolio.py      # Portfolio analysis
-│   │   ├── risk_metrics.py  # Risk calculations
-│   │   └── optimization.py  # Portfolio optimization
-│   └── orchestrator/         # Workflow management
-│       └── workflow.py      # API orchestration
-├── main.py                   # Main demo script
-├── cli.py                    # CLI interface
-├── build.sh                  # Build script
-├── requirements.txt          # Dependencies
-├── .env.example             # Environment template
-├── README.md                # Full documentation
-└── QUICK_START.md          # Quick start guide
-```
+## Frontend (Dashboard & Modal)
+- Templates: `templates/dashboard.html` (sections “📈 On Sale / Buy Opportunity” and “📉 Overbought / Sell Oportunities”), `templates/components/analysis_modal.html`, `home.html`.
+- Static JS: `static/js/analysis_modal.js` for modal logic and indicator rendering; `static/js/logger.js` gated logger (disabled unless explicitly enabled via `localStorage.enableClientLogger=true` or `window.ENABLE_CLIENT_LOGGER=true`).
 
-## 🔌 API Integrations
+## Runtime Behavior & Optimizations (Recent)
+- Shared, long-lived `HistoricalFetcher` and `MarketScanner` to reuse cached history/quotes across requests.
+- Bounded caches: `HistoricalFetcher` TTL cache; `dashboard_cache` size reduced (64) to cut memory pressure.
+- Lightweight vs full analysis: dashboard/overview use quick scans with shorter lookbacks and fewer symbols; full analysis deferred to `/api/analysis/{symbol}`.
+- JSON safety: pandas Series converted to dict with NaN→None before responses to avoid serialization errors.
+- Optional clients: guarded imports/use to prevent `ModuleNotFoundError` when optional deps are absent.
 
-### Financial Data APIs
-1. **Alpha Vantage**
-   - Real-time quotes
-   - Historical data
-   - Technical indicators
-   - Symbol search
+## API Surface (High Level)
+- `/dashboard`, `/overview`: render cached opportunities via lightweight scans.
+- `/api/historical/{symbol}`: historical data + indicators (SMA, MACD, RSI) NaN-safe.
+- `/api/analysis/{symbol}`: full detailed analysis on demand.
+- `/scan`: scanning endpoint; toggles `full_analysis` and lookback; uses shared scanner/fetcher.
+- Logging endpoint available but frontend logger is gated off by default.
 
-2. **Yahoo Finance**
-   - Market data (no API key needed)
-   - Company information
-   - Financial statements
-   - Historical prices
+## Setup, Run, Test
+- Requirements: `python >= 3.9`, `pip install -r requirements.txt`.
+- Env: copy `.env.example` → `.env` (Alpha Vantage key, optional API keys).
+- Run server: `python api_service.py` or `./restart_server.sh`; CLI: `python cli.py --help`.
+- Tests: `pytest` (coverage optional).
+- Docker: optional build/run (see README if Dockerfile present).
 
-### Project Management APIs
-3. **GitHub API**
-   - Repository operations
-   - Issue management
-   - Commit tracking
-   - Release creation
-
-## 🚀 How to Use
-
-### Quick Start
-```bash
-# 1. Build the project
-./build.sh
-
-# 2. Configure API keys in .env
-# Edit .env file with your keys
-
-# 3. Run demo
-source venv/bin/activate
-python main.py
-```
-
-### CLI Usage
-```bash
-# Get stock quote
-python cli.py quote AAPL --source yahoo
-
-# Get quote from Alpha Vantage
-python cli.py quote AAPL --source alpha
-```
-
-### Programmatic Usage
-```python
-from src.api_clients.yahoo_finance import YahooFinanceClient
-from src.analysis.portfolio import PortfolioAnalyzer
-
-# Fetch data
-client = YahooFinanceClient()
-quote = client.get_quote("AAPL")
-
-# Analyze portfolio
-portfolio = PortfolioAnalyzer(symbols=["AAPL", "GOOGL", "MSFT"])
-analysis = portfolio.analyze_portfolio(prices)
-```
-
-## 📊 Features Demonstrated
-
-1. **Multi-API Integration**
-   - Multiple data sources
-   - Unified interface
-   - Error handling
-   - Rate limiting
-
-2. **Financial Engineering**
-   - Portfolio analysis
-   - Risk metrics (VaR, CVaR, Sharpe)
-   - Portfolio optimization
-   - Performance metrics
-
-3. **Workflow Automation**
-   - API orchestration
-   - Task sequencing
-   - Automated workflows
-
-4. **Best Practices**
-   - Clean architecture
-   - Error handling
-   - Caching
-   - Rate limiting
-   - Environment configuration
-
-## 🔑 API Keys Needed
-
-1. **Alpha Vantage**: https://www.alphavantage.co/support/#api-key (Free tier: 5 req/min)
-2. **GitHub**: https://github.com/settings/tokens (Personal Access Token)
-3. **Yahoo Finance**: No key needed (free)
-
-## 📈 Next Steps
-
-1. ✅ Run `./build.sh` to set up
-2. ✅ Add API keys to `.env`
-3. ✅ Run `python main.py` to see demos
-4. ✅ Explore the code in `src/`
-5. ✅ Extend with additional APIs
-6. ✅ Add more analysis features
-
-## 🎓 Learning Outcomes
-
-This project demonstrates:
-- ✅ REST API integration
-- ✅ Financial data processing
-- ✅ Portfolio analysis
-- ✅ Risk management
-- ✅ Workflow orchestration
-- ✅ Python best practices
-- ✅ Project structure
-- ✅ Build automation
-
----
-
-**Project Status: ✅ Complete and Ready for Demonstration**
+## Operational Notes
+- Memory: bounded caches plus symbol caps mitigate growth; `HistoricalFetcher.clear()` available if needed.
+- UI labels updated; client logger off by default to reduce noise.
+- Commit reminders: use `./.scripts/auto_commit.sh` or `gac "msg"` after changes.
