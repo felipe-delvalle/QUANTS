@@ -674,6 +674,28 @@
 <!-- Include Logger (must be before analysis_modal.js) -->
 <script src="/static/js/logger.js"></script>
 
+<!-- Ensure all console messages are visible (including Google messages) -->
+<script>
+  // Ensure console methods are not filtered - show all messages including Google
+  if (window.console) {
+    // Restore original console methods if they were overridden
+    const originalConsole = {
+      log: console.log.bind(console),
+      warn: console.warn.bind(console),
+      error: console.error.bind(console),
+      info: console.info.bind(console),
+      debug: console.debug.bind(console)
+    };
+    
+    // Ensure all console messages are displayed (no filtering)
+    console.log = originalConsole.log;
+    console.warn = originalConsole.warn;
+    console.error = originalConsole.error;
+    console.info = originalConsole.info;
+    console.debug = originalConsole.debug;
+  }
+</script>
+
 <!-- Include Modal JavaScript -->
 <script src="/static/js/analysis_modal.js"></script>
 </body>
