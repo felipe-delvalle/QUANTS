@@ -1,0 +1,41 @@
+name: Auto-Commit Reminder
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened]
+
+jobs:
+  remind-about-commits:
+    name: Remind About Commits
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Add comment reminder
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const isPR = context.eventName === 'pull_request';
+          const body = isPR 
+            ? context.payload.pull_request.body 
+            : context.payload.issue.body;
+          
+          // Check if they mentioned losing work or forgetting to commit
+          const keywords = ['lost', 'forgot', 'commit', 'save', 'backup', 'changes'];
+          const hasKeyword = keywords.some(keyword => 
+            body && body.toLowerCase().includes(keyword)
+          );
+          
+          if (hasKeyword || !body || body.length < 100) {
+            const comment = isPR
+              ? `💡 **Tip:** To prevent losing work, use the auto-commit script:\n\`\`\`bash\n./.scripts/auto_commit.sh\n\`\`\`\nOr use Git shortcuts: \`gac "your message"\` to add all and commit.`
+              : `💡 **Tip:** To prevent losing work in the future, use the auto-commit script:\n\`\`\`bash\n./.scripts/auto_commit.sh\n\`\`\``;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+          }

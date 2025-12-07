@@ -46,3 +46,13 @@
 - Hand off to Codex for review/analysis when appropriate
 - Mark goals [BLOCKED] if user input is needed
 
+### Git & Commit Workflow:
+- **IMPORTANT: Always remind user to commit changes** after completing work to prevent loss
+- After making significant changes, suggest running: `./.scripts/auto_commit.sh` or `gac "description"`
+- Before finishing a session, remind: "Don't forget to commit your changes!"
+- When user accepts changes, suggest: "Changes accepted! Run `./.scripts/auto_commit.sh` to save them."
+- For feature branches, remind about creating PRs before merging to main
+- Use meaningful commit messages that describe what was changed
+- Check git status before suggesting commits: `git status` or `gs`
+- If working on a feature, remind about PR workflow: create PR, get review, then merge
+

@@ -1,0 +1,23 @@
+# CODEOWNERS file
+# This file defines who owns different parts of the codebase
+# GitHub will automatically request reviews from these owners for PRs
+
+# Default owner for everything
+* @felipe-delvalle
+
+# Work directory
+/Work/ @felipe-delvalle
+
+# GitHub workflows and templates
+/.github/ @felipe-delvalle
+
+# Configuration files
+/.cursor/ @felipe-delvalle
+/.scripts/ @felipe-delvalle
+
+# Documentation
+*.md @felipe-delvalle
+/README.md @felipe-delvalle
+
+# Python code (if you have multiple contributors later)
+# *.py @felipe-delvalle
