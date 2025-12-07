@@ -406,23 +406,33 @@ def get_historical_data(
         
         # Add indicators if requested
         if indicators and len(data) > 50:
-            from src.trading.technical_indicators import TechnicalAnalyzer
-            
-            analyzer = TechnicalAnalyzer(data["close"])
-            analyzer.set_ohlcv(high=data["high"], low=data["low"], volume=data.get("volume"))
-            
-            analysis = analyzer.comprehensive_analysis()
-            
-            # Convert series to dict for JSON serialization
-            result["indicators"] = {
-                "sma_20": analysis["moving_averages"]["ma_20"].to_dict() if "ma_20" in analysis["moving_averages"] else {},
-                "sma_50": analysis["moving_averages"]["ma_50"].to_dict() if "ma_50" in analysis["moving_averages"] else {},
-                "rsi": {"current": analysis.get("current_rsi", 50)},
-                "macd": {
-                    "macd": analysis["macd"]["macd"].tail(100).to_dict() if "macd" in analysis["macd"] else {},
-                    "signal": analysis["macd"]["signal"].tail(100).to_dict() if "signal" in analysis["macd"] else {}
+            try:
+                from src.trading.technical_indicators import TechnicalAnalyzer
+                
+                analyzer = TechnicalAnalyzer(data["close"])
+                analyzer.set_ohlcv(high=data["high"], low=data["low"], volume=data.get("volume"))
+                
+                analysis = analyzer.comprehensive_analysis()
+                
+                # Convert series to dict for JSON serialization
+                result["indicators"] = {
+                    "sma_20": analysis["moving_averages"]["ma_20"].to_dict() if "ma_20" in analysis.get("moving_averages", {}) else {},
+                    "sma_50": analysis["moving_averages"]["ma_50"].to_dict() if "ma_50" in analysis.get("moving_averages", {}) else {},
+                    "rsi": {"current": analysis.get("current_rsi", 50)},
+                    "macd": {
+                        "macd": analysis["macd"]["macd"].tail(100).to_dict() if "macd" in analysis.get("macd", {}) else {},
+                        "signal": analysis["macd"]["signal"].tail(100).to_dict() if "signal" in analysis.get("macd", {}) else {}
+                    }
                 }
-            }
+            except Exception as indicator_error:
+                logger.error(f"Error calculating indicators for {symbol}: {indicator_error}", exc_info=True)
+                # Return basic structure without indicators rather than failing completely
+                result["indicators"] = {
+                    "sma_20": {},
+                    "sma_50": {},
+                    "rsi": {"current": 50},
+                    "macd": {"macd": {}, "signal": {}}
+                }
         
         # Add signal history
         performance = fetcher.get_signal_performance(symbol, lookback_days=365)
