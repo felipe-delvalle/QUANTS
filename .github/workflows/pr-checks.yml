@@ -96,3 +96,37 @@ jobs:
           fi
           echo "✓ Commit message OK: '$msg'"
         done
+
+  request-review:
+    name: Request Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+    - name: Request review from code owner
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const pr = context.payload.pull_request;
+          const reviewer = 'felipe-delvalle';
+          
+          // Check if reviewer is already requested
+          const reviews = await github.rest.pulls.listRequestedReviewers({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: pr.number
+          });
+          
+          const requestedReviewers = reviews.data.users.map(u => u.login);
+          
+          if (!requestedReviewers.includes(reviewer)) {
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              reviewers: [reviewer]
+            });
+            console.log(`✓ Requested review from @${reviewer}`);
+          } else {
+            console.log(`✓ @${reviewer} is already requested as a reviewer`);
+          }
