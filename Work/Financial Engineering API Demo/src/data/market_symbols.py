@@ -42,7 +42,7 @@ MARKET_SYMBOLS: Dict[Sector, List[str]] = {
     ],
     Sector.COMMUNICATION_SERVICES: [
         "META", "GOOGL", "GOOG", "NFLX", "DIS", "CMCSA", "VZ", "T",
-        "CHTR", "TMUS", "EA", "TTWO", "ATVI", "LYFT", "UBER", "SNAP"
+        "CHTR", "TMUS", "EA", "TTWO", "LYFT", "UBER", "SNAP"
     ],
     Sector.INDUSTRIALS: [
         "BA", "CAT", "GE", "HON", "UPS", "RTX", "LMT", "DE",
@@ -66,25 +66,27 @@ MARKET_SYMBOLS: Dict[Sector, List[str]] = {
     ],
     Sector.MATERIALS: [
         "LIN", "APD", "SHW", "ECL", "DD", "PPG", "FCX", "NEM",
-        "VALE", "RIO", "BHP", "NUE", "STLD", "X", "CLF", "CMC"
+        "VALE", "RIO", "BHP", "NUE", "STLD", "CLF", "CMC"
     ],
 }
 
 # Crypto symbols
 CRYPTO_SYMBOLS: List[str] = [
-    "BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT",
-    "MATIC", "AVAX", "LINK", "UNI", "LTC", "ATOM", "ETC", "XLM"
+    "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "DOT-USD", "AVAX-USD",
+    "LINK-USD", "LTC-USD", "ATOM-USD", "ETC-USD", "XLM-USD", "XRP-USD",
+    "DOGE-USD", "MATIC-USD"
 ]
 
 # Forex pairs
 FOREX_PAIRS: List[str] = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD",
-    "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURCHF",
-    "USDMXN", "USDCNH", "USDINR", "USDKRW"
+    "EURUSD=X", "GBPUSD=X", "USDJPY=X", "USDCHF=X", "AUDUSD=X", "USDCAD=X",
+    "NZDUSD=X", "EURGBP=X", "EURJPY=X", "GBPJPY=X", "AUDJPY=X", "EURCHF=X"
 ]
 
 # Commodities
 COMMODITIES: List[str] = [
-    "GOLD", "SILVER", "PLATINUM", "PALLADIUM", "OIL", "NATURAL_GAS",
-    "COPPER", "CORN", "WHEAT", "SOYBEANS", "SUGAR", "COFFEE"
+    "GC=F", "SI=F", "PL=F", "PA=F",  # Metals: Gold, Silver, Platinum, Palladium
+    "CL=F", "NG=F", "HG=F",          # Energy/Metals: Crude, Nat Gas, Copper
+    "ZC=F", "ZW=F", "ZS=F",          # Ags: Corn, Wheat, Soybeans
+    "SB=F", "KC=F"                   # Softs: Sugar, Coffee
 ]

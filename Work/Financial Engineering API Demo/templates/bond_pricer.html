@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #0b1221;
+      --panel: #111829;
+      --panel-2: #182035;
+      --border: #243047;
+      --accent: #5de0e6;
+      --accent-2: #6be07b;
+      --text: #e8edf6;
+      --muted: #a0a8b8;
+      --warn: #ffb347;
+    }
+    body { margin: 20px; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); }
+    h1 { color: var(--accent); margin-bottom: 8px; }
+    p { color: var(--muted); margin-top: 0; }
+    .layout { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 16px; align-items: start; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
+    .card h2 { margin: 0 0 12px 0; color: var(--accent); font-size: 18px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); margin-bottom: 12px; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .inline { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .actions { display: flex; gap: 10px; margin-top: 4px; }
+    button { padding: 10px 14px; border: none; border-radius: 8px; cursor: pointer; font-weight: 700; }
+    .primary { background: var(--accent); color: var(--bg); }
+    .secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    .primary:hover { background: #4bc4ca; }
+    .secondary:hover { border-color: var(--accent); }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+    .metric { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .metric .label { font-size: 12px; color: var(--muted); }
+    .metric .value { font-size: 20px; font-weight: 700; color: var(--accent); }
+    .yield-visual { margin-top: 12px; }
+    .bar { height: 14px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; position: relative; overflow: hidden; }
+    .bar .fill { position: absolute; top: 0; left: 0; height: 100%; background: linear-gradient(90deg, #6be07b, #5de0e6); }
+    .bar .marker { position: absolute; top: -4px; width: 2px; height: 22px; background: #ff7b7b; }
+    .legend { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 6px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 8px; text-align: left; border: 1px solid var(--border); font-size: 13px; }
+    th { background: var(--panel-2); color: var(--accent); }
+    tr:nth-child(even) { background: var(--panel-2); }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); font-size: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .link { color: var(--accent); text-decoration: none; font-weight: 700; }
+    .link:hover { text-decoration: underline; }
+    .badge { background: var(--warn); color: var(--bg); padding: 4px 8px; border-radius: 6px; font-size: 12px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <h1>Bond Pricer (US & EU)</h1>
+  <div class="row">
+    <span class="pill">Plain-vanilla, fixed coupon</span>
+    <span class="pill">Price from market yield or solve YTM from price</span>
+    <a href="/home" class="link">← Back to Home</a>
+    <a href="/dashboard" class="link">← Back to Dashboard</a>
+  </div>
+  <p>Select a market (US Treasuries or EU Gov), pick a preset, or enter custom inputs. We compute price, YTM, current yield, and duration; a simple visual compares yield vs. market rate.</p>
+
+  <div class="layout">
+    <div class="card">
+      <h2>Inputs</h2>
+      <label for="market">Market</label>
+      <select id="market"></select>
+
+      <label for="preset">Preset bonds</label>
+      <select id="preset"></select>
+
+      <div class="inline">
+        <div>
+          <label for="faceValue">Face value</label>
+          <input type="number" id="faceValue" value="1000" min="0" step="10" />
+        </div>
+        <div>
+          <label for="couponRate">Coupon rate (%)</label>
+          <input type="number" id="couponRate" value="4.0" min="0" step="0.05" />
+        </div>
+      </div>
+
+      <div class="inline">
+        <div>
+          <label for="maturityYears">Years to maturity</label>
+          <input type="number" id="maturityYears" value="5" min="0.1" step="0.1" />
+        </div>
+        <div>
+          <label for="frequency">Coupon frequency</label>
+          <select id="frequency">
+            <option value="1">Annual</option>
+            <option value="2" selected>Semiannual</option>
+            <option value="4">Quarterly</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="inline">
+        <div>
+          <label for="marketRate">Market yield (%) <span class="badge">use to price</span></label>
+          <input type="number" id="marketRate" value="4.0" min="0" step="0.05" />
+        </div>
+        <div>
+          <label for="price">Price (optional) <span class="badge">solve YTM</span></label>
+          <input type="number" id="price" placeholder="Leave blank to price from yield" min="0" step="0.01" />
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" id="priceBondBtn">Price bond</button>
+        <button class="secondary" id="resetBtn">Reset</button>
+      </div>
+      <div id="formError" style="color:#ff7b7b; margin-top:8px; display:none;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Results</h2>
+      <div class="metrics">
+        <div class="metric">
+          <div class="label">Price</div>
+          <div class="value" id="metricPrice">–</div>
+        </div>
+        <div class="metric">
+          <div class="label">YTM (annual)</div>
+          <div class="value" id="metricYtm">–</div>
+        </div>
+        <div class="metric">
+          <div class="label">Current yield</div>
+          <div class="value" id="metricCurrentYield">–</div>
+        </div>
+        <div class="metric">
+          <div class="label">Duration (years)</div>
+          <div class="value" id="metricDuration">–</div>
+        </div>
+      </div>
+
+      <div class="yield-visual">
+        <div class="label" style="margin-bottom:4px;">Yield vs. market</div>
+        <div class="bar">
+          <div class="fill" id="yieldFill" style="width:0%;"></div>
+          <div class="marker" id="marketMarker" style="left:0%;"></div>
+        </div>
+        <div class="legend">
+          <span id="legendYtm">YTM: –</span>
+          <span id="legendMarket">Market: –</span>
+        </div>
+      </div>
+
+      <h3 style="color: var(--accent); margin-top: 16px; margin-bottom: 6px;">Cashflows</h3>
+      <table id="cashflowTable">
+        <thead>
+          <tr>
+            <th>Period</th>
+            <th>Time (yrs)</th>
+            <th>Cashflow</th>
+            <th>PV @ yield</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="4" style="text-align:center; color: var(--muted);">Run a calculation to see cashflows</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    window.BOND_PRESETS = {{ presets_json | safe }};
+    window.BOND_MARKETS = {{ markets | tojson }};
+  </script>
+  <script src="/static/js/bond_pricer.js"></script>
+</body>
+</html>

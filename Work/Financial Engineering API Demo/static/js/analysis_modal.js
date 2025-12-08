@@ -425,7 +425,19 @@ function initializeTechnicalCharts() {
   });
   
   // Volume profile
-  const vpCtx = document.getElementById('volumeProfile').getContext('2d');
+  const vpCanvas = document.getElementById('volumeProfile');
+  if (!vpCanvas) {
+    console.warn('Volume profile canvas not found');
+    return;
+  }
+  // Fix the canvas height so Chart.js doesn't inflate it and slow layout
+  if (vpCanvas) {
+    vpCanvas.height = 220;
+    vpCanvas.style.height = '220px';
+    vpCanvas.style.maxHeight = '220px';
+  }
+  
+  const vpCtx = vpCanvas.getContext('2d');
   volumeProfileChart = new Chart(vpCtx, {
     type: 'bar',
     data: {
@@ -433,18 +445,34 @@ function initializeTechnicalCharts() {
       datasets: [{
         label: 'Volume',
         data: [],
-        backgroundColor: 'rgba(93, 224, 230, 0.5)'
+        backgroundColor: 'rgba(93, 224, 230, 0.5)',
+        maxBarThickness: 18
       }]
     },
     options: {
-      indexAxis: 'y',
+      indexAxis: 'x', // Horizontal bars: dates on x-axis, volume on y-axis
       responsive: true,
       maintainAspectRatio: false,
+      animation: false,
+      interaction: {
+        mode: 'nearest',
+        intersect: false
+      },
       plugins: {
         legend: { display: false }
       },
       scales: {
         x: {
+          title: {
+            display: true,
+            text: 'Date'
+          },
+          ticks: {
+            autoSkip: true,
+            maxTicksLimit: 12
+          }
+        },
+        y: {
           title: {
             display: true,
             text: 'Volume'
@@ -563,8 +591,9 @@ function updateChartWithData(data, symbol) {
     priceChart.update();
     
     // Update volume profile (simplified - show recent volumes)
+    // Rotated horizontally: dates on x-axis (oldest to most recent), volume bars extend vertically
     if (volumeProfileChart && volumes.length > 0) {
-      // Take last 20 data points for volume profile
+      // Take last 20 data points for volume profile, ordered from oldest to most recent
       const recentVolumes = volumes.slice(-20);
       const recentDates = dates.slice(-20).map(d => {
         try {
@@ -582,8 +611,9 @@ function updateChartWithData(data, symbol) {
         }
       });
       
-      volumeProfileChart.data.labels = recentDates;
-      volumeProfileChart.data.datasets[0].data = recentVolumes;
+      // Ensure dates are ordered from oldest to most recent (already sorted, but verify)
+      volumeProfileChart.data.labels = recentDates; // Dates on x-axis (horizontal)
+      volumeProfileChart.data.datasets[0].data = recentVolumes; // Volume bars extend vertically
       volumeProfileChart.update();
     }
   } catch (error) {
