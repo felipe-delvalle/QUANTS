@@ -84,6 +84,9 @@
 <body>
   <h1>{{ title }}</h1>
   <p>Live opportunities across assets. Data is fetched on request.{% if demo_mode %}<span class="demo-indicator">[DEMO MODE]</span>{% endif %}</p>
+  <div style="margin: 12px 0;">
+    <a href="/bond-pricer" style="display:inline-block; padding:8px 14px; background:#5de0e6; color:#0b1221; border-radius:8px; font-weight:700; text-decoration:none;">🔗 Open Bond Pricer</a>
+  </div>
   
   <div class="resources-section">
     <h2>📚 Available API Resources</h2>
@@ -107,6 +110,11 @@
         <span class="method get">GET</span>
         <div class="endpoint"><a href="/gallery" target="_blank">/gallery</a></div>
         <div class="description">Chart gallery - View generated visualizations</div>
+      </div>
+      <div class="resource-item">
+        <span class="method get">GET</span>
+        <div class="endpoint"><a href="/bond-pricer" target="_blank">/bond-pricer</a></div>
+        <div class="description">Bond pricer - US & EU presets, price/YTM</div>
       </div>
       <div class="resource-item">
         <span class="method post">POST</span>

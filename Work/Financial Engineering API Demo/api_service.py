@@ -95,6 +95,16 @@ class BacktestRequest(BaseModel):
     slippage_bps: float = 5.0
 
 
+class BondPriceRequest(BaseModel):
+    face_value: float = 1000.0
+    coupon_rate_pct: float
+    years_to_maturity: float
+    frequency: int = 2
+    market_rate_pct: Optional[float] = None
+    price: Optional[float] = None
+    market: Optional[str] = "US Treasuries"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -156,6 +166,7 @@ def home(request: Request):
                 {"method": "GET", "path": "/home", "desc": "Home - navigation"},
                 {"method": "GET", "path": "/dashboard", "desc": "Trading opportunities dashboard"},
                 {"method": "GET", "path": "/gallery", "desc": "Chart gallery"},
+                {"method": "GET", "path": "/bond-pricer", "desc": "Bond pricer for US/EU"},
                 {"method": "GET", "path": "/health", "desc": "Health check"},
                 {"method": "GET", "path": "/", "desc": "API root"},
                 {"method": "POST", "path": "/scan", "desc": "Scan for trading opportunities (requires API key)"},
@@ -229,6 +240,160 @@ def _categorize_opportunities(opportunities: List[Dict]) -> Dict[str, List[Dict]
         "on_sale": on_sale,
         "overbought": overbought
     }
+
+
+def _build_bond_cashflows(face_value: float, coupon_rate_pct: float, years_to_maturity: float, frequency: int) -> List[Dict[str, float]]:
+    periods = max(int(round(years_to_maturity * frequency)), 1)
+    coupon_payment = face_value * (coupon_rate_pct / 100.0) / frequency
+    cashflows = []
+    for n in range(1, periods + 1):
+        cashflow = coupon_payment
+        if n == periods:
+            cashflow += face_value
+        cashflows.append({
+            "period": n,
+            "cashflow": cashflow,
+            "time_years": n / frequency
+        })
+    return cashflows
+
+
+def _price_from_rate(cashflows: List[Dict[str, float]], rate_pct: float, frequency: int) -> Optional[float]:
+    if rate_pct is None:
+        return None
+    rate_decimal = rate_pct / 100.0
+    total = 0.0
+    for item in cashflows:
+        discount = (1 + rate_decimal / frequency) ** item["period"]
+        total += item["cashflow"] / discount
+    return total
+
+
+def _ytm_from_price(cashflows: List[Dict[str, float]], target_price: float, frequency: int, max_rate: float = 0.3) -> Optional[float]:
+    """
+    Solve for yield to maturity (annualized, percent) via binary search.
+    """
+    if target_price is None or target_price <= 0 or not cashflows:
+        return None
+    
+    low = 0.0
+    high = max_rate
+    mid = 0.0
+    for _ in range(80):
+        mid = (low + high) / 2
+        price_estimate = _price_from_rate(cashflows, mid * 100, frequency)
+        if price_estimate is None:
+            return None
+        if abs(price_estimate - target_price) < 1e-4:
+            break
+        if price_estimate > target_price:
+            low = mid
+        else:
+            high = mid
+    return mid * 100
+
+
+def _macaulay_duration(cashflows: List[Dict[str, float]], rate_pct: Optional[float], frequency: int, price: Optional[float]) -> Optional[float]:
+    if rate_pct is None or price is None or price <= 0:
+        return None
+    rate_decimal = rate_pct / 100.0
+    numerator = 0.0
+    for item in cashflows:
+        discount = (1 + rate_decimal / frequency) ** item["period"]
+        pv = item["cashflow"] / discount
+        numerator += item["time_years"] * pv
+    return numerator / price
+
+
+BOND_MARKETS = ["US Treasuries", "EU Gov"]
+
+BOND_PRESETS = {
+    "US Treasuries": [
+        {"id": "ust-2y", "name": "US Treasury 2Y", "face_value": 1000, "coupon_rate_pct": 4.2, "years_to_maturity": 2.0, "frequency": 2, "market_rate_pct": 4.1, "price": None},
+        {"id": "ust-5y", "name": "US Treasury 5Y", "face_value": 1000, "coupon_rate_pct": 3.8, "years_to_maturity": 5.0, "frequency": 2, "market_rate_pct": 3.9, "price": None},
+        {"id": "ust-10y", "name": "US Treasury 10Y", "face_value": 1000, "coupon_rate_pct": 4.0, "years_to_maturity": 10.0, "frequency": 2, "market_rate_pct": 4.2, "price": None},
+    ],
+    "EU Gov": [
+        {"id": "bund-5y", "name": "Bund 5Y", "face_value": 1000, "coupon_rate_pct": 2.5, "years_to_maturity": 5.0, "frequency": 1, "market_rate_pct": 2.4, "price": None},
+        {"id": "bund-10y", "name": "Bund 10Y", "face_value": 1000, "coupon_rate_pct": 2.8, "years_to_maturity": 10.0, "frequency": 1, "market_rate_pct": 2.6, "price": None},
+        {"id": "oat-7y", "name": "France OAT 7Y", "face_value": 1000, "coupon_rate_pct": 2.9, "years_to_maturity": 7.0, "frequency": 1, "market_rate_pct": 2.7, "price": None},
+    ],
+}
+
+
+@app.get("/bond-pricer", response_class=HTMLResponse)
+def bond_pricer_page(request: Request):
+    return templates.TemplateResponse(
+        "bond_pricer.html",
+        {
+            "request": request,
+            "title": "Bond Pricer (US & EU)",
+            "markets": BOND_MARKETS,
+            "presets": BOND_PRESETS,
+            "presets_json": json.dumps(BOND_PRESETS),
+        },
+    )
+
+
+@app.post("/api/bond/price")
+def price_bond(req: BondPriceRequest):
+    """
+    Price a plain-vanilla bond and solve YTM if price is provided.
+    """
+    try:
+        cashflows = _build_bond_cashflows(
+            face_value=req.face_value,
+            coupon_rate_pct=req.coupon_rate_pct,
+            years_to_maturity=req.years_to_maturity,
+            frequency=req.frequency,
+        )
+        
+        price_from_market = _price_from_rate(cashflows, req.market_rate_pct, req.frequency) if req.market_rate_pct is not None else None
+        target_price = req.price if req.price is not None else price_from_market
+        
+        if target_price is None:
+            raise HTTPException(status_code=400, detail="Provide either market_rate_pct (to compute price) or price (to solve YTM).")
+        
+        ytm_pct = _ytm_from_price(cashflows, target_price, req.frequency)
+        if ytm_pct is None and req.market_rate_pct is not None:
+            ytm_pct = req.market_rate_pct
+        
+        current_yield_pct = None
+        if target_price > 0:
+            annual_coupon = req.face_value * (req.coupon_rate_pct / 100.0)
+            current_yield_pct = (annual_coupon / target_price) * 100.0
+        
+        used_rate = ytm_pct if ytm_pct is not None else req.market_rate_pct
+        duration_years = _macaulay_duration(cashflows, used_rate, req.frequency, target_price)
+        modified_duration_years = None
+        if duration_years is not None and used_rate is not None:
+            modified_duration_years = duration_years / (1 + (used_rate / 100.0) / req.frequency)
+        
+        annotated_cashflows = []
+        if used_rate is not None:
+            rate_decimal = used_rate / 100.0
+            for item in cashflows:
+                discount = (1 + rate_decimal / req.frequency) ** item["period"]
+                pv = item["cashflow"] / discount
+                annotated_cashflows.append({**item, "pv": pv})
+        else:
+            annotated_cashflows = cashflows
+        
+        return {
+            "inputs": req.dict(),
+            "price": target_price,
+            "price_from_market": price_from_market,
+            "ytm_pct": ytm_pct,
+            "current_yield_pct": current_yield_pct,
+            "duration_years": duration_years,
+            "modified_duration_years": modified_duration_years,
+            "cashflows": annotated_cashflows,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error pricing bond: {e}")
+        raise HTTPException(status_code=500, detail="Failed to price bond")
 
 
 def _get_asset_type(symbol: str) -> AssetType:
