@@ -5,7 +5,21 @@
   <title>{{ title }}</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 20px; background: #0b1221; color: #e8edf6; }
-    h1 { color: #5de0e6; }
+    h1 { color: #5de0e6; margin: 0; }
+    .hero-bar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+    .hero-text p { margin: 6px 0 0 0; color: #a0a8b8; }
+    .cta-button { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; background: #5de0e6; color: #0b1221; border-radius: 8px; font-weight: 700; text-decoration: none; box-shadow: 0 6px 18px rgba(0,0,0,0.35); }
+    .cta-button:hover { background: #4bc4ca; }
+    .resources-section { background: #111829; border: 1px solid #243047; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
+    .resources-section h2 { color: #5de0e6; margin-top: 0; margin-bottom: 12px; font-size: 18px; }
+    .api-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .api-card { background: #111829; border: 1px solid #243047; padding: 14px; border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,0.25); }
+    .api-card .method { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 8px; }
+    .api-card .method.get { background: #6be07b; color: #0b1221; }
+    .api-card .method.post { background: #5de0e6; color: #0b1221; }
+    .api-card a { color: #5de0e6; text-decoration: none; font-weight: bold; }
+    .api-card a:hover { text-decoration: underline; }
+    .api-desc { color: #a0a8b8; font-size: 13px; margin-top: 4px; }
     .controls { background: #111829; border: 1px solid #243047; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
     .controls label { display: inline-block; margin-right: 10px; color: #e8edf6; }
     .controls input[type="number"] { width: 80px; padding: 6px; background: #182035; border: 1px solid #243047; color: #e8edf6; border-radius: 4px; }
@@ -30,17 +44,6 @@
     .quick-buttons { display: inline-block; margin-left: 12px; }
     .quick-buttons button { padding: 6px 12px; margin-right: 6px; font-size: 13px; }
     .demo-indicator { color: #ffd700; font-weight: bold; margin-left: 12px; }
-    .resources-section { background: #111829; border: 1px solid #243047; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
-    .resources-section h2 { color: #5de0e6; margin-top: 0; margin-bottom: 12px; font-size: 18px; }
-    .resources-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; }
-    .resource-item { background: #182035; border: 1px solid #243047; padding: 12px; border-radius: 6px; }
-    .resource-item .method { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; margin-right: 8px; }
-    .resource-item .method.get { background: #6be07b; color: #0b1221; }
-    .resource-item .method.post { background: #5de0e6; color: #0b1221; }
-    .resource-item .endpoint { color: #5de0e6; font-family: monospace; font-size: 14px; margin: 4px 0; }
-    .resource-item .description { color: #a0a8b8; font-size: 12px; margin-top: 4px; }
-    .resource-item a { color: #5de0e6; text-decoration: none; }
-    .resource-item a:hover { text-decoration: underline; }
     .strategy-section { background: #111829; border: 1px solid #243047; padding: 16px; border-radius: 8px; margin-bottom: 20px; }
     .strategy-section h2 { color: #5de0e6; margin-top: 0; margin-bottom: 12px; font-size: 18px; }
     .strategy-section h3 { color: #5de0e6; margin-top: 16px; margin-bottom: 8px; font-size: 16px; border-bottom: 1px solid #243047; padding-bottom: 8px; }
@@ -82,49 +85,56 @@
   </style>
 </head>
 <body>
-  <h1>{{ title }}</h1>
-  <p>Live opportunities across assets. Data is fetched on request.{% if demo_mode %}<span class="demo-indicator">[DEMO MODE]</span>{% endif %}</p>
-  <div style="margin: 12px 0;">
-    <a href="/bond-pricer" style="display:inline-block; padding:8px 14px; background:#5de0e6; color:#0b1221; border-radius:8px; font-weight:700; text-decoration:none;">🔗 Open Bond Pricer</a>
+  <div class="hero-bar">
+    <div class="hero-text">
+      <h1>{{ title }}</h1>
+      <p>Live opportunities across assets. Data is fetched on request.{% if demo_mode %}<span class="demo-indicator">[DEMO MODE]</span>{% endif %}</p>
+    </div>
+    <a href="/bond-pricer" class="cta-button">🔗 Open Bond Pricer</a>
   </div>
   
   <div class="resources-section">
     <h2>📚 Available API Resources</h2>
-    <div class="resources-grid">
-      <div class="resource-item">
+    <div class="api-grid">
+      <div class="api-card">
         <span class="method get">GET</span>
-        <div class="endpoint"><a href="/" target="_blank">/</a></div>
-        <div class="description">API root - List all available endpoints</div>
+        <a href="/home">/home</a>
+        <div class="api-desc">Home - navigation</div>
       </div>
-      <div class="resource-item">
+      <div class="api-card">
         <span class="method get">GET</span>
-        <div class="endpoint"><a href="/health" target="_blank">/health</a></div>
-        <div class="description">Health check endpoint</div>
+        <a href="/dashboard">/dashboard</a>
+        <div class="api-desc">Trading opportunities dashboard (current page)</div>
       </div>
-      <div class="resource-item">
+      <div class="api-card">
         <span class="method get">GET</span>
-        <div class="endpoint"><a href="/dashboard" target="_blank">/dashboard</a></div>
-        <div class="description">Trading opportunities dashboard (current page)</div>
+        <a href="/gallery">/gallery</a>
+        <div class="api-desc">Chart gallery - View generated visualizations</div>
       </div>
-      <div class="resource-item">
+      <div class="api-card">
         <span class="method get">GET</span>
-        <div class="endpoint"><a href="/gallery" target="_blank">/gallery</a></div>
-        <div class="description">Chart gallery - View generated visualizations</div>
+        <a href="/bond-pricer">/bond-pricer</a>
+        <div class="api-desc">Bond pricer for US/EU</div>
       </div>
-      <div class="resource-item">
+      <div class="api-card">
         <span class="method get">GET</span>
-        <div class="endpoint"><a href="/bond-pricer" target="_blank">/bond-pricer</a></div>
-        <div class="description">Bond pricer - US & EU presets, price/YTM</div>
+        <a href="/health">/health</a>
+        <div class="api-desc">Health check endpoint</div>
       </div>
-      <div class="resource-item">
+      <div class="api-card">
+        <span class="method get">GET</span>
+        <a href="/">/</a>
+        <div class="api-desc">API root - List all available endpoints</div>
+      </div>
+      <div class="api-card">
         <span class="method post">POST</span>
-        <div class="endpoint">/scan</div>
-        <div class="description">Scan for trading opportunities (requires API key)</div>
+        <span>/scan</span>
+        <div class="api-desc">Scan for trading opportunities (requires API key)</div>
       </div>
-      <div class="resource-item">
+      <div class="api-card">
         <span class="method post">POST</span>
-        <div class="endpoint">/backtest</div>
-        <div class="description">Backtest trading strategies (requires API key)</div>
+        <span>/backtest</span>
+        <div class="api-desc">Backtest trading strategies (requires API key)</div>
       </div>
     </div>
   </div>

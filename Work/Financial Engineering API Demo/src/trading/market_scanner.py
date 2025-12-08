@@ -9,6 +9,7 @@ from datetime import datetime
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
+from cachetools import TTLCache
 
 from ..config import AssetType
 from ..data.market_symbols import Sector, MARKET_SYMBOLS
@@ -40,6 +41,8 @@ class MarketScanner:
         self.historical_fetcher = historical_fetcher if historical_fetcher is not None else HistoricalFetcher()
         self.analyzer = DetailedAnalyzer(self.data_loader)
         self.max_workers = max_workers
+        # Cache last known prices for fallback when live or historical data is unavailable
+        self.last_price_cache: TTLCache = TTLCache(maxsize=1024, ttl=720)
     
     def _process_symbol(
         self,
@@ -69,6 +72,7 @@ class MarketScanner:
             Opportunity dictionary or None if filtered out
         """
         try:
+            fallback_reason = None
             # Fetch real-time price if not provided
             if current_price is None:
                 try:
@@ -77,21 +81,34 @@ class MarketScanner:
                     if current_price <= 0:
                         logger.warning(f"Invalid price for {symbol}: {current_price}, skipping")
                         return None
+                    # Store for future fallback
+                    self.last_price_cache[symbol] = current_price
                 except Exception as price_error:
                     logger.warning(f"Failed to fetch real-time price for {symbol}: {price_error}")
-                    # Try to get from historical data as fallback
-                    try:
-                        fallback_data = self.historical_fetcher.fetch_historical_data(
-                            symbol, asset_type_enum, years=0.5, use_cache=True
-                        )
-                        if fallback_data is not None and len(fallback_data) > 0:
-                            current_price = float(fallback_data["close"].iloc[-1])
-                        else:
-                            logger.warning(f"No historical data available for {symbol}, skipping")
-                            return None
-                    except Exception as hist_error:
-                        logger.warning(f"Failed to get historical price for {symbol}: {hist_error}")
+
+            # Use cached last price if live quote failed
+            if current_price is None:
+                cached_price = self.last_price_cache.get(symbol)
+                if cached_price is not None:
+                    current_price = cached_price
+                    fallback_reason = "Using cached price (quote fallback)"
+
+            # Try historical data as a secondary fallback
+            if current_price is None:
+                try:
+                    fallback_data = self.historical_fetcher.fetch_historical_data(
+                        symbol, asset_type_enum, years=0.5, use_cache=True
+                    )
+                    if fallback_data is not None and len(fallback_data) > 0:
+                        current_price = float(fallback_data["close"].iloc[-1])
+                        self.last_price_cache[symbol] = current_price
+                        fallback_reason = "Using cached price (historical fallback)"
+                    else:
+                        logger.warning(f"No historical data available for {symbol}, skipping")
                         return None
+                except Exception as hist_error:
+                    logger.warning(f"Failed to get historical price for {symbol}: {hist_error}")
+                    return None
             
             # Fetch historical data for analysis if not provided
             if historical_data is None:
@@ -189,6 +206,13 @@ class MarketScanner:
                 trend = "neutral"
                 reasons = ["Analysis unavailable"]
             
+            # Include fallback context if applicable
+            if fallback_reason:
+                if isinstance(reasons, list):
+                    reasons.append(fallback_reason)
+                else:
+                    reasons = [reasons, fallback_reason] if reasons else [fallback_reason]
+
             # Filter by minimum confidence
             if confidence < min_confidence:
                 return None

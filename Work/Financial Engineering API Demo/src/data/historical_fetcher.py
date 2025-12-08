@@ -25,7 +25,7 @@ class HistoricalFetcher:
     
     def __init__(self):
         """Initialize historical fetcher"""
-        self.cache: TTLCache = TTLCache(maxsize=100, ttl=300)
+        self.cache: TTLCache = TTLCache(maxsize=256, ttl=720)
     
     def fetch_historical_data(
         self,
@@ -220,8 +220,7 @@ class HistoricalFetcher:
                         " ".join(batch),
                         period=period,
                         group_by='ticker',
-                        progress=False,
-                        show_errors=False
+                        progress=False
                     )
                     
                     # Process each symbol's data

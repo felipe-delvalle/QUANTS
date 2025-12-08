@@ -3,6 +3,7 @@ FastAPI service exposing scan, signal, and backtest endpoints.
 """
 
 import sys
+import asyncio
 from pathlib import Path
 
 # Add project root to Python path
@@ -11,7 +12,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import json
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set, Any
 import os
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Query
@@ -33,6 +34,16 @@ from src.backtesting import BacktestEngine
 from src.api_clients.yahoo_finance import YahooFinanceClient
 import pandas as pd
 
+try:
+    import psutil  # Optional; used for monitoring
+except ImportError:  # pragma: no cover
+    psutil = None
+
+try:
+    import redis  # Optional; used for persisted preload snapshot
+except ImportError:  # pragma: no cover
+    redis = None
+
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
 
@@ -52,10 +63,62 @@ rate_limiter = TTLCache(maxsize=512, ttl=60)
 # Dashboard result caching (5 minute TTL)
 dashboard_cache = TTLCache(maxsize=64, ttl=300)
 
+# Preload/retention settings
+PRELOAD_INTERVAL_SECONDS = 300  # every 5 minutes
+PRELOAD_RETENTION_SECONDS = 720  # target ~12 minutes retention
+
 # Shared data loader and scanners to reuse caches across requests
-shared_loader = DataLoader()
+shared_loader = DataLoader(cache_ttl_seconds=PRELOAD_RETENTION_SECONDS)
 shared_historical_fetcher = HistoricalFetcher()
 shared_scanner = MarketScanner(data_loader=shared_loader, historical_fetcher=shared_historical_fetcher)
+
+# Preload state
+preload_task: Optional[asyncio.Task] = None
+last_preload_timestamp: Optional[datetime] = None
+last_preload_stats: Dict[str, Any] = {}
+last_preload_opportunities: List[Dict[str, Any]] = []
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+
+def _get_redis_client():
+    if not redis:
+        return None
+    try:
+        return redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    except Exception:
+        return None
+
+
+def _persist_preload_snapshot(opps: List[Dict[str, Any]], stats: Dict[str, Any], timestamp: datetime):
+    client = _get_redis_client()
+    if not client:
+        return
+    try:
+        payload = json.dumps(
+            {
+                "timestamp": timestamp.isoformat(),
+                "stats": stats,
+                "opps": opps,
+            }
+        )
+        client.setex("preload:snapshot", PRELOAD_RETENTION_SECONDS * 2, payload)
+    except Exception:
+        pass
+
+
+def _load_preload_snapshot() -> Optional[Dict[str, Any]]:
+    client = _get_redis_client()
+    if not client:
+        return None
+    try:
+        raw = client.get("preload:snapshot")
+        if not raw:
+            return None
+        data = json.loads(raw)
+        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+        return data
+    except Exception:
+        return None
 
 
 def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_types: Optional[str], demo: bool) -> str:
@@ -63,6 +126,142 @@ def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_typ
     sectors_str = sectors or "all"
     asset_types_str = asset_types or "none"
     return f"dashboard:{threshold:.2f}:{sectors_str}:{asset_types_str}:{demo}"
+
+
+def _collect_preload_symbols() -> Dict[str, List[str]]:
+    """Gather symbols to warm caches across all asset types."""
+    stock_symbols: List[str] = []
+    for sector, symbols in MARKET_SYMBOLS.items():
+        stock_symbols.extend(list(symbols))
+    # Deduplicate while preserving order
+    seen = set()
+    stock_symbols = [s for s in stock_symbols if not (s in seen or seen.add(s))]
+
+    return {
+        AssetType.STOCK.value: stock_symbols,
+        AssetType.CRYPTO.value: list(CRYPTO_SYMBOLS),
+        AssetType.FOREX.value: list(FOREX_PAIRS),
+        AssetType.METAL.value: list(COMMODITIES),
+    }
+
+
+def _filter_opportunities(
+    opportunities: List[Dict[str, Any]],
+    threshold: float,
+    selected_sectors: Optional[Set[str]],
+    selected_asset_types: Optional[Set[str]],
+) -> List[Dict[str, Any]]:
+    """Apply threshold/sector/asset filters to a list of opportunities."""
+    if not opportunities:
+        return []
+
+    sector_lookup: Dict[str, str] = {}
+    if selected_sectors:
+        for sector, symbols in MARKET_SYMBOLS.items():
+            for sym in symbols:
+                sector_lookup[sym] = sector.value if hasattr(sector, "value") else str(sector)
+
+    filtered = []
+    for opp in opportunities:
+        conf = opp.get("confidence", 0)
+        if conf < threshold:
+            continue
+
+        asset_type = str(opp.get("asset_type", "")).lower()
+        if selected_asset_types and asset_type and asset_type not in selected_asset_types:
+            continue
+
+        if selected_sectors:
+            sym = opp.get("symbol")
+            sym_sector = sector_lookup.get(sym)
+            if sym_sector and sym_sector not in selected_sectors:
+                continue
+
+        filtered.append(opp)
+
+    return filtered
+
+
+def _prune_caches() -> None:
+    """Expire any stale entries to keep memory bounded."""
+    for cache in (shared_loader.cache, shared_historical_fetcher.cache, dashboard_cache):
+        try:
+            cache.expire()
+        except Exception:
+            continue
+
+
+def _preload_once() -> Dict[str, Any]:
+    """Run one preload cycle to warm caches and store last opportunities."""
+    global last_preload_timestamp, last_preload_stats, last_preload_opportunities
+
+    start = datetime.utcnow()
+    stats: Dict[str, Any] = {"per_asset": {}, "symbols": 0, "errors": []}
+    last_preload_opportunities = []
+
+    symbol_groups = _collect_preload_symbols()
+
+    for asset_type_value, symbols in symbol_groups.items():
+        if not symbols:
+            continue
+        try:
+            historical_years = 0.5 if asset_type_value == AssetType.STOCK.value else 0.25
+            opps = shared_scanner.scan_stocks(
+                symbols=symbols,
+                min_confidence=0.0,  # preload everything, filter later
+                asset_type=asset_type_value,
+                full_analysis=False,
+                historical_years=historical_years,
+            )
+            stats["per_asset"][asset_type_value] = len(opps)
+            stats["symbols"] += len(symbols)
+            last_preload_opportunities.extend(opps)
+        except Exception as exc:  # pragma: no cover
+            logger.error("Preload failed for %s: %s", asset_type_value, exc, exc_info=True)
+            stats["errors"].append(f"{asset_type_value}: {exc}")
+
+    stats["duration_sec"] = (datetime.utcnow() - start).total_seconds()
+    last_preload_timestamp = datetime.utcnow()
+    last_preload_stats = stats
+    _persist_preload_snapshot(last_preload_opportunities, stats, last_preload_timestamp)
+    _prune_caches()
+    return stats
+
+
+async def _preload_loop():
+    """Background loop to refresh caches every PRELOAD_INTERVAL_SECONDS."""
+    while True:
+        try:
+            await asyncio.to_thread(_preload_once)
+        except Exception as exc:  # pragma: no cover
+            logger.error("Background preload failed: %s", exc, exc_info=True)
+        await asyncio.sleep(PRELOAD_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def _start_preload_task():
+    """Kick off the periodic preload loop."""
+    global preload_task
+    if preload_task is None:
+        preload_task = asyncio.create_task(_preload_loop())
+        logger.info(
+            "Preload task started (interval=%ss, retention=%ss)",
+            PRELOAD_INTERVAL_SECONDS,
+            PRELOAD_RETENTION_SECONDS,
+        )
+
+
+@app.on_event("shutdown")
+async def _stop_preload_task():
+    """Stop the periodic preload loop cleanly."""
+    global preload_task
+    if preload_task:
+        preload_task.cancel()
+        try:
+            await preload_task
+        except asyncio.CancelledError:
+            pass
+        preload_task = None
 
 
 
@@ -108,6 +307,57 @@ class BondPriceRequest(BaseModel):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/monitor")
+def monitor():
+    """Lightweight monitoring: preload status, cache sizes, Redis status, and process memory."""
+    process_mem_mb = None
+    if psutil:
+        try:
+            process = psutil.Process(os.getpid())
+            process_mem_mb = round(process.memory_info().rss / (1024 * 1024), 2)
+        except Exception:
+            process_mem_mb = None
+    
+    # Check Redis status
+    redis_status = {"available": False, "connected": False, "snapshot_exists": False}
+    redis_client = _get_redis_client()
+    if redis_client:
+        redis_status["available"] = True
+        try:
+            redis_client.ping()
+            redis_status["connected"] = True
+            snapshot = redis_client.get("preload:snapshot")
+            redis_status["snapshot_exists"] = snapshot is not None
+            if snapshot:
+                try:
+                    import json
+                    data = json.loads(snapshot)
+                    redis_status["snapshot_age_sec"] = (
+                        datetime.utcnow() - datetime.fromisoformat(data.get("timestamp", ""))
+                    ).total_seconds() if data.get("timestamp") else None
+                except Exception:
+                    pass
+        except Exception as e:
+            redis_status["error"] = str(e)
+    
+    return {
+        "preload": {
+            "interval_sec": PRELOAD_INTERVAL_SECONDS,
+            "retention_sec": PRELOAD_RETENTION_SECONDS,
+            "last_run": last_preload_timestamp.isoformat() if last_preload_timestamp else None,
+            "stats": last_preload_stats,
+            "opportunities_cached": len(last_preload_opportunities),
+        },
+        "caches": {
+            "dashboard_cache": {"size": len(dashboard_cache), "ttl": dashboard_cache.ttl},
+            "historical_fetcher": {"size": len(shared_historical_fetcher.cache), "ttl": shared_historical_fetcher.cache.ttl},
+            "data_loader": {"size": len(shared_loader.cache), "ttl": shared_loader.cache.ttl},
+        },
+        "redis": redis_status,
+        "resources": {"process_mem_mb": process_mem_mb},
+    }
 
 
 @app.post("/scan")
@@ -400,19 +650,17 @@ def _get_asset_type(symbol: str) -> AssetType:
     """Map symbol to its asset type."""
     symbol_upper = symbol.upper()
     
-    # Known crypto symbols
-    crypto_symbols = {"BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "MATIC", "AVAX", "LINK", "UNI", "LTC", "ATOM", "ETC"}
-    if symbol_upper in crypto_symbols:
+    # Crypto tickers typically use -USD suffix
+    if symbol_upper.endswith("-USD"):
         return AssetType.CRYPTO
     
-    # Known forex pairs
-    forex_pairs = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURCHF", "USDMXN", "USDCNH", "USDINR"}
-    if symbol_upper in forex_pairs:
+    # Forex pairs use =X suffix
+    if symbol_upper.endswith("=X"):
         return AssetType.FOREX
     
-    # Known metals
-    metals = {"GOLD", "SILVER", "PLATINUM", "PALLADIUM"}
-    if symbol_upper in metals:
+    # Commodities futures prefixes
+    commodity_prefixes = ("GC=", "SI=", "PL=", "PA=", "CL=", "NG=", "HG=", "ZC=", "ZW=", "ZS=", "SB=", "KC=")
+    if symbol_upper.startswith(commodity_prefixes):
         return AssetType.METAL
     
     # Default to stock
@@ -808,6 +1056,15 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         asset_types: Comma-separated list of additional asset types (e.g., "crypto,forex,commodities")
     """
     try:
+        # Try to hydrate preload snapshot from Redis if memory state is empty (e.g., after restart)
+        global last_preload_opportunities, last_preload_stats, last_preload_timestamp
+        if not last_preload_opportunities:
+            snapshot = _load_preload_snapshot()
+            if snapshot:
+                last_preload_opportunities = snapshot.get("opps", [])
+                last_preload_stats = snapshot.get("stats", {})
+                last_preload_timestamp = snapshot.get("timestamp")
+
         # Check cache first
         cache_key = _get_dashboard_cache_key(threshold, sectors, asset_types, demo)
         if cache_key in dashboard_cache:
@@ -833,8 +1090,10 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         all_symbols = []
         
         # Process sector filters
+        selected_sectors = None
         if sectors:
-            selected_sectors = [s.strip() for s in sectors.split(",")]
+            selected_sectors_list = [s.strip() for s in sectors.split(",") if s.strip()]
+            selected_sectors = set(selected_sectors_list)
             for sector in Sector:
                 if sector.value in selected_sectors:
                     all_symbols.extend(MARKET_SYMBOLS[sector])
@@ -844,8 +1103,10 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
                 all_symbols.extend(symbols[:2])  # Top 2 from each sector
         
         # Add additional asset types if selected
+        selected_asset_types = None
         if asset_types:
-            selected_types = [t.strip() for t in asset_types.split(",")]
+            selected_types = [t.strip().lower() for t in asset_types.split(",") if t.strip()]
+            selected_asset_types = set(selected_types)
             if "crypto" in selected_types:
                 all_symbols.extend(CRYPTO_SYMBOLS[:5])  # Top 5 cryptos
             if "forex" in selected_types:
@@ -863,20 +1124,37 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         if demo:
             logger.info("Demo mode active: Using sample data for all symbols")
         
-        # Group symbols by asset type
-        symbols_by_type = {}
-        for symbol in all_symbols:
-            asset_type = _get_asset_type(symbol)
-            if asset_type.value not in symbols_by_type:
-                symbols_by_type[asset_type.value] = []
-            symbols_by_type[asset_type.value].append(symbol)
-        
-        # Scan each asset type separately
-        all_opps = []
-        for asset_type_value, symbols in symbols_by_type.items():
-            try:
-                if demo:
-                    # Demo mode: use scanner's scan_stocks but it will use sample data
+        # Prefer preloaded snapshot when available and recent
+        all_opps: List[Dict[str, Any]] = []
+        used_preloaded = False
+        if last_preload_opportunities and last_preload_timestamp:
+            age_sec = (datetime.utcnow() - last_preload_timestamp).total_seconds()
+            if age_sec <= PRELOAD_RETENTION_SECONDS * 2:
+                preloaded_filtered = _filter_opportunities(
+                    last_preload_opportunities,
+                    threshold,
+                    selected_sectors,
+                    selected_asset_types,
+                )
+                if preloaded_filtered:
+                    all_opps = preloaded_filtered
+                    used_preloaded = True
+                    logger.info("Served dashboard from preloaded snapshot (age %.1fs, %s items)", age_sec, len(all_opps))
+                    for opp in all_opps:
+                        at = str(opp.get("asset_type", "")).lower()
+                        asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
+
+        # If preloaded data insufficient, run live scans
+        if not all_opps:
+            symbols_by_type: Dict[str, List[str]] = {}
+            for symbol in all_symbols:
+                asset_type = _get_asset_type(symbol)
+                if asset_type.value not in symbols_by_type:
+                    symbols_by_type[asset_type.value] = []
+                symbols_by_type[asset_type.value].append(symbol)
+            
+            for asset_type_value, symbols in symbols_by_type.items():
+                try:
                     opps = shared_scanner.scan_stocks(
                         symbols,
                         min_confidence=threshold,
@@ -887,23 +1165,18 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
                     )
                     all_opps.extend(opps)
                     asset_type_counts[asset_type_value] = len(opps)
-                    logger.info(f"[DEMO] {asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
-                else:
-                    # Normal mode: let scanner handle data fetching and fallback to sample data
-                    opps = shared_scanner.scan_stocks(
-                        symbols,
-                        min_confidence=threshold,
-                        asset_type=asset_type_value,
-                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
-                        full_analysis=False,
-                        historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
-                    )
-                    all_opps.extend(opps)
-                    asset_type_counts[asset_type_value] = len(opps)
-                    logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
-            except Exception as e:
-                logger.error(f"Error scanning {asset_type_value} symbols: {e}")
-                failed_sources.append(f"{asset_type_value}_scanner")
+                    logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols (live scan)")
+                except Exception as e:
+                    logger.error(f"Error scanning {asset_type_value} symbols: {e}")
+                    failed_sources.append(f"{asset_type_value}_scanner")
+
+            # If still empty, fall back to last preload unfiltered
+            if not all_opps and last_preload_opportunities:
+                logger.warning("Using last preloaded opportunities as fallback (no live results).")
+                all_opps = list(last_preload_opportunities)
+                for opp in all_opps:
+                    at = str(opp.get("asset_type", "")).lower()
+                    asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
         
         # Categorize opportunities
         categorized = _categorize_opportunities(all_opps)
@@ -917,7 +1190,7 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
             "failed_sources": failed_sources,
             "asset_type_counts": asset_type_counts,
         }
-        logger.info(f"Dashboard results cached with key: {cache_key}")
+        logger.info(f"Dashboard results cached with key: {cache_key} (used_preloaded={used_preloaded}, count={len(all_opps)})")
         
         return templates.TemplateResponse(
             "dashboard.html",

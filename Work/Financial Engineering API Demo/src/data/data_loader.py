@@ -43,7 +43,7 @@ class DataLoader:
 
     def __init__(
         self,
-        cache_ttl_seconds: int = 900,
+        cache_ttl_seconds: int = 720,
         max_retries: int = DEFAULT_MAX_RETRIES,
         backoff_seconds: float = DEFAULT_BACKOFF_SECONDS,
     ) -> None:
