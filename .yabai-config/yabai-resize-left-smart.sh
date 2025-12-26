@@ -1,5 +1,5 @@
 #!/bin/bash
-# Alt+Ctrl+K: SHRINK the focused window (make it smaller)
+# Alt+Ctrl+K: LEFT window shrinks, RIGHT window expands
 
 # Get current window info
 WINDOW_INFO=$(yabai -m query --windows --window 2>/dev/null)
@@ -15,6 +15,6 @@ if [ "$SPLIT_CHILD" = "first_child" ]; then
     # LEFT window: shrink it by moving right edge left
     yabai -m window --resize right:-50:0 2>/dev/null
 else
-    # RIGHT window: shrink it by moving left edge right
-    yabai -m window --resize left:50:0 2>/dev/null
+    # RIGHT window: expand it by moving left edge left
+    yabai -m window --resize left:-50:0 2>/dev/null
 fi
