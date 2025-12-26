@@ -27,6 +27,10 @@ if [ "$SPLIT_CHILD" = "first_child" ]; then
         yabai -m window "$OPPOSING_WINDOW" --resize left:50:0 2>/dev/null || true
     fi
 else
-    # RIGHT window - directly resize to expand left
-    yabai -m window --resize left:-50:0 2>/dev/null || true
+    # RIGHT window - expand left by having left window shrink from right
+    OPPOSING_WINDOW=$(yabai -m query --windows | jq -r ".[] | select(.display == $CURRENT_DISPLAY and .\"split-type\" == \"vertical\" and .\"split-child\" == \"first_child\" and .id != $CURRENT_ID) | .id" | head -1)
+    if [ -n "$OPPOSING_WINDOW" ]; then
+        # Shrink left window from its right edge (pushes divider left)
+        yabai -m window "$OPPOSING_WINDOW" --resize right:-50:0 2>/dev/null || true
+    fi
 fi
