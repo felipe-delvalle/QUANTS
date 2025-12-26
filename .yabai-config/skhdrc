@@ -1,0 +1,74 @@
+# skhd configuration for yabai
+# Modifier keys: alt, shift, ctrl, cmd, fn
+# Use 'alt' for Option key, 'cmd' for Command key
+
+# ===========================================
+# Window Focus (Alt + Arrow Keys)
+# ===========================================
+alt - k : yabai -m window --focus west
+alt - o : yabai -m window --focus south
+alt - i : yabai -m window --focus north
+alt - l : yabai -m window --focus east
+
+# ===========================================
+# Window Swap (Alt + Shift + Arrow Keys)
+# ===========================================
+alt + shift - k : yabai -m window --swap west
+alt + shift - o : yabai -m window --swap south
+alt + shift - i : yabai -m window --swap north
+alt + shift - l : yabai -m window --swap east
+
+# ===========================================
+# Window Resize (Alt + Ctrl + Arrow Keys)
+# ===========================================
+# K (left key): Smart resize affecting left side
+alt + ctrl - k : bash /Users/freedom/.local/bin/yabai-resize-left-smart.sh
+# L (right key): Smart resize affecting right side
+alt + ctrl - l : bash /Users/freedom/.local/bin/yabai-resize-right-smart.sh
+alt + ctrl - o : yabai -m window --resize bottom:0:50
+alt + ctrl - i : yabai -m window --resize top:0:-50
+
+# ===========================================
+# Window Management
+# ===========================================
+alt - f : yabai -m window --toggle float  # Toggle float
+alt - t : yabai -m window --toggle sticky          # Toggle always on top (sticky)
+alt - m : yabai -m window --toggle zoom-fullscreen # Toggle fullscreen
+alt - c : yabai -m window --close                 # Close window
+
+# ===========================================
+# Layout Management
+# ===========================================
+alt - b : yabai -m space --layout bsp            # BSP layout
+alt - s : yabai -m space --layout stack           # Stack layout
+alt - d : yabai -m space --layout float           # Float layout
+alt - r : yabai -m space --rotate 90              # Rotate layout
+
+# ===========================================
+# Space Management (Alt + Number Keys)
+# ===========================================
+alt - 1 : yabai -m space --focus 1
+alt - 2 : yabai -m space --focus 2
+alt - 3 : yabai -m space --focus 3
+alt - 4 : yabai -m space --focus 4
+alt - 5 : yabai -m space --focus 5
+alt - 6 : yabai -m space --focus 6
+alt - 7 : yabai -m space --focus 7
+alt - 8 : yabai -m space --focus 8
+alt - 9 : yabai -m space --focus 9
+
+# ===========================================
+# Move Window to Space
+# ===========================================
+alt + shift - n : yabai -m window --space next; yabai -m space --focus next    # Move window to next space
+alt + shift - p : yabai -m window --space prev; yabai -m space --focus prev    # Move window to previous space
+
+# ===========================================
+# Window Balance
+# ===========================================
+alt - e : yabai -m space --balance                # Balance all windows
+
+# ===========================================
+# Restart yabai (useful for config changes)
+# ===========================================
+alt + shift - r : yabai --restart-service
