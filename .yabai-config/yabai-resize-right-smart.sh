@@ -1,7 +1,7 @@
 #!/bin/bash
 # Alt+Ctrl+L: Expand window to the RIGHT
 # Works for any app based on window position, not app name
-# When primary resize fails, expands opposing window to achieve same effect
+# Note: In BSP, expanding one window means shrinking the opposing window
 
 # Get current window info
 WINDOW_INFO=$(yabai -m query --windows --window 2>/dev/null)
@@ -11,15 +11,22 @@ fi
 
 CURRENT_ID=$(echo "$WINDOW_INFO" | jq -r '.id')
 CURRENT_DISPLAY=$(echo "$WINDOW_INFO" | jq -r '.display')
+SPLIT_CHILD=$(echo "$WINDOW_INFO" | jq -r '.["split-child"]')
 
-# Alt+L should expand window to the RIGHT
-# Try to expand right edge right first
-if ! yabai -m window --resize right:50:0 2>/dev/null; then
-    # Can't expand right (at edge), expand the left window to the right instead
-    # This shrinks the left window, making the right window wider
+# Strategy: To expand to the RIGHT, we need the DIVIDER to move RIGHT
+# In vertical split:
+#   - first_child (left): resize right:+X moves divider right ✓
+#   - second_child (right): resize left:-X moves divider right ✓  BUT this also moves window right
+# Better approach: Always use the left window to do the resize when possible
+
+if [ "$SPLIT_CHILD" = "first_child" ]; then
+    # LEFT window - directly resize right
+    yabai -m window --resize right:50:0 2>/dev/null || true
+else
+    # RIGHT window - use opposing window (left) to resize
     OPPOSING_WINDOW=$(yabai -m query --windows | jq -r ".[] | select(.display == $CURRENT_DISPLAY and .\"split-type\" == \"vertical\" and .\"split-child\" == \"first_child\" and .id != $CURRENT_ID) | .id" | head -1)
     if [ -n "$OPPOSING_WINDOW" ]; then
-        # Expand left window to the right (shrink it from right)
-        yabai -m window "$OPPOSING_WINDOW" --resize right:-50:0 2>/dev/null || true
+        # Resize the left window to push divider right (expands right window)
+        yabai -m window "$OPPOSING_WINDOW" --resize right:50:0 2>/dev/null || true
     fi
 fi

@@ -3,7 +3,6 @@ FastAPI service exposing scan, signal, and backtest endpoints.
 """
 
 import sys
-import asyncio
 from pathlib import Path
 
 # Add project root to Python path
@@ -12,10 +11,10 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import json
-from typing import List, Optional, Dict, Set, Any
+from typing import List, Optional, Dict, Any
 import os
 from datetime import datetime
-from fastapi import FastAPI, Depends, HTTPException, Header, Request, Query
+from fastapi import FastAPI, HTTPException, Header, Request, Query
 from pydantic import BaseModel
 from cachetools import TTLCache
 from fastapi.templating import Jinja2Templates
@@ -25,10 +24,11 @@ from fastapi.staticfiles import StaticFiles
 from src.config import get_settings, configure_logging, AssetType
 from src.data import DataLoader
 from src.trading.market_scanner import MarketScanner
-from src.trading.signal_generator import SignalGenerator
 from src.data.market_symbols import Sector, MARKET_SYMBOLS, CRYPTO_SYMBOLS, FOREX_PAIRS, COMMODITIES
 from src.data.historical_fetcher import HistoricalFetcher
 from src.analysis import DetailedAnalyzer, ReportGenerator
+from src.analysis.yield_curve import YieldCurve, CurveFactory, IndexCurveFactory, IndexRegistry
+from src.api_clients.fred_api import FREDClient
 from src.analysis.advanced_indicators import AdvancedIndicators
 from src.backtesting import BacktestEngine
 from src.api_clients.yahoo_finance import YahooFinanceClient
@@ -38,11 +38,6 @@ try:
     import psutil  # Optional; used for monitoring
 except ImportError:  # pragma: no cover
     psutil = None
-
-try:
-    import redis  # Optional; used for persisted preload snapshot
-except ImportError:  # pragma: no cover
-    redis = None
 
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
@@ -60,208 +55,15 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Simple in-memory rate limiting
 rate_limiter = TTLCache(maxsize=512, ttl=60)
 
-# Dashboard result caching (5 minute TTL)
-dashboard_cache = TTLCache(maxsize=64, ttl=300)
-
-# Preload/retention settings
-PRELOAD_INTERVAL_SECONDS = 300  # every 5 minutes
-PRELOAD_RETENTION_SECONDS = 720  # target ~12 minutes retention
+# Cache settings for shared loaders
+PRELOAD_RETENTION_SECONDS = 720  # cache TTL for shared loader/fetcher
 
 # Shared data loader and scanners to reuse caches across requests
 shared_loader = DataLoader(cache_ttl_seconds=PRELOAD_RETENTION_SECONDS)
 shared_historical_fetcher = HistoricalFetcher()
+shared_historical_fetcher.cache = TTLCache(maxsize=1000, ttl=720)
 shared_scanner = MarketScanner(data_loader=shared_loader, historical_fetcher=shared_historical_fetcher)
 
-# Preload state
-preload_task: Optional[asyncio.Task] = None
-last_preload_timestamp: Optional[datetime] = None
-last_preload_stats: Dict[str, Any] = {}
-last_preload_opportunities: List[Dict[str, Any]] = []
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-
-
-def _get_redis_client():
-    if not redis:
-        return None
-    try:
-        return redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    except Exception:
-        return None
-
-
-def _persist_preload_snapshot(opps: List[Dict[str, Any]], stats: Dict[str, Any], timestamp: datetime):
-    client = _get_redis_client()
-    if not client:
-        return
-    try:
-        payload = json.dumps(
-            {
-                "timestamp": timestamp.isoformat(),
-                "stats": stats,
-                "opps": opps,
-            }
-        )
-        client.setex("preload:snapshot", PRELOAD_RETENTION_SECONDS * 2, payload)
-    except Exception:
-        pass
-
-
-def _load_preload_snapshot() -> Optional[Dict[str, Any]]:
-    client = _get_redis_client()
-    if not client:
-        return None
-    try:
-        raw = client.get("preload:snapshot")
-        if not raw:
-            return None
-        data = json.loads(raw)
-        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
-        return data
-    except Exception:
-        return None
-
-
-def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_types: Optional[str], demo: bool) -> str:
-    """Generate cache key for dashboard results"""
-    sectors_str = sectors or "all"
-    asset_types_str = asset_types or "none"
-    return f"dashboard:{threshold:.2f}:{sectors_str}:{asset_types_str}:{demo}"
-
-
-def _collect_preload_symbols() -> Dict[str, List[str]]:
-    """Gather symbols to warm caches across all asset types."""
-    stock_symbols: List[str] = []
-    for sector, symbols in MARKET_SYMBOLS.items():
-        stock_symbols.extend(list(symbols))
-    # Deduplicate while preserving order
-    seen = set()
-    stock_symbols = [s for s in stock_symbols if not (s in seen or seen.add(s))]
-
-    return {
-        AssetType.STOCK.value: stock_symbols,
-        AssetType.CRYPTO.value: list(CRYPTO_SYMBOLS),
-        AssetType.FOREX.value: list(FOREX_PAIRS),
-        AssetType.METAL.value: list(COMMODITIES),
-    }
-
-
-def _filter_opportunities(
-    opportunities: List[Dict[str, Any]],
-    threshold: float,
-    selected_sectors: Optional[Set[str]],
-    selected_asset_types: Optional[Set[str]],
-) -> List[Dict[str, Any]]:
-    """Apply threshold/sector/asset filters to a list of opportunities."""
-    if not opportunities:
-        return []
-
-    sector_lookup: Dict[str, str] = {}
-    if selected_sectors:
-        for sector, symbols in MARKET_SYMBOLS.items():
-            for sym in symbols:
-                sector_lookup[sym] = sector.value if hasattr(sector, "value") else str(sector)
-
-    filtered = []
-    for opp in opportunities:
-        conf = opp.get("confidence", 0)
-        if conf < threshold:
-            continue
-
-        asset_type = str(opp.get("asset_type", "")).lower()
-        if selected_asset_types and asset_type and asset_type not in selected_asset_types:
-            continue
-
-        if selected_sectors:
-            sym = opp.get("symbol")
-            sym_sector = sector_lookup.get(sym)
-            if sym_sector and sym_sector not in selected_sectors:
-                continue
-
-        filtered.append(opp)
-
-    return filtered
-
-
-def _prune_caches() -> None:
-    """Expire any stale entries to keep memory bounded."""
-    for cache in (shared_loader.cache, shared_historical_fetcher.cache, dashboard_cache):
-        try:
-            cache.expire()
-        except Exception:
-            continue
-
-
-def _preload_once() -> Dict[str, Any]:
-    """Run one preload cycle to warm caches and store last opportunities."""
-    global last_preload_timestamp, last_preload_stats, last_preload_opportunities
-
-    start = datetime.utcnow()
-    stats: Dict[str, Any] = {"per_asset": {}, "symbols": 0, "errors": []}
-    last_preload_opportunities = []
-
-    symbol_groups = _collect_preload_symbols()
-
-    for asset_type_value, symbols in symbol_groups.items():
-        if not symbols:
-            continue
-        try:
-            historical_years = 0.5 if asset_type_value == AssetType.STOCK.value else 0.25
-            opps = shared_scanner.scan_stocks(
-                symbols=symbols,
-                min_confidence=0.0,  # preload everything, filter later
-                asset_type=asset_type_value,
-                full_analysis=False,
-                historical_years=historical_years,
-            )
-            stats["per_asset"][asset_type_value] = len(opps)
-            stats["symbols"] += len(symbols)
-            last_preload_opportunities.extend(opps)
-        except Exception as exc:  # pragma: no cover
-            logger.error("Preload failed for %s: %s", asset_type_value, exc, exc_info=True)
-            stats["errors"].append(f"{asset_type_value}: {exc}")
-
-    stats["duration_sec"] = (datetime.utcnow() - start).total_seconds()
-    last_preload_timestamp = datetime.utcnow()
-    last_preload_stats = stats
-    _persist_preload_snapshot(last_preload_opportunities, stats, last_preload_timestamp)
-    _prune_caches()
-    return stats
-
-
-async def _preload_loop():
-    """Background loop to refresh caches every PRELOAD_INTERVAL_SECONDS."""
-    while True:
-        try:
-            await asyncio.to_thread(_preload_once)
-        except Exception as exc:  # pragma: no cover
-            logger.error("Background preload failed: %s", exc, exc_info=True)
-        await asyncio.sleep(PRELOAD_INTERVAL_SECONDS)
-
-
-@app.on_event("startup")
-async def _start_preload_task():
-    """Kick off the periodic preload loop."""
-    global preload_task
-    if preload_task is None:
-        preload_task = asyncio.create_task(_preload_loop())
-        logger.info(
-            "Preload task started (interval=%ss, retention=%ss)",
-            PRELOAD_INTERVAL_SECONDS,
-            PRELOAD_RETENTION_SECONDS,
-        )
-
-
-@app.on_event("shutdown")
-async def _stop_preload_task():
-    """Stop the periodic preload loop cleanly."""
-    global preload_task
-    if preload_task:
-        preload_task.cancel()
-        try:
-            await preload_task
-        except asyncio.CancelledError:
-            pass
-        preload_task = None
 
 
 
@@ -311,7 +113,7 @@ def health():
 
 @app.get("/api/monitor")
 def monitor():
-    """Lightweight monitoring: preload status, cache sizes, Redis status, and process memory."""
+    """Lightweight monitoring: cache sizes and process memory."""
     process_mem_mb = None
     if psutil:
         try:
@@ -319,43 +121,11 @@ def monitor():
             process_mem_mb = round(process.memory_info().rss / (1024 * 1024), 2)
         except Exception:
             process_mem_mb = None
-    
-    # Check Redis status
-    redis_status = {"available": False, "connected": False, "snapshot_exists": False}
-    redis_client = _get_redis_client()
-    if redis_client:
-        redis_status["available"] = True
-        try:
-            redis_client.ping()
-            redis_status["connected"] = True
-            snapshot = redis_client.get("preload:snapshot")
-            redis_status["snapshot_exists"] = snapshot is not None
-            if snapshot:
-                try:
-                    import json
-                    data = json.loads(snapshot)
-                    redis_status["snapshot_age_sec"] = (
-                        datetime.utcnow() - datetime.fromisoformat(data.get("timestamp", ""))
-                    ).total_seconds() if data.get("timestamp") else None
-                except Exception:
-                    pass
-        except Exception as e:
-            redis_status["error"] = str(e)
-    
     return {
-        "preload": {
-            "interval_sec": PRELOAD_INTERVAL_SECONDS,
-            "retention_sec": PRELOAD_RETENTION_SECONDS,
-            "last_run": last_preload_timestamp.isoformat() if last_preload_timestamp else None,
-            "stats": last_preload_stats,
-            "opportunities_cached": len(last_preload_opportunities),
-        },
         "caches": {
-            "dashboard_cache": {"size": len(dashboard_cache), "ttl": dashboard_cache.ttl},
             "historical_fetcher": {"size": len(shared_historical_fetcher.cache), "ttl": shared_historical_fetcher.cache.ttl},
             "data_loader": {"size": len(shared_loader.cache), "ttl": shared_loader.cache.ttl},
         },
-        "redis": redis_status,
         "resources": {"process_mem_mb": process_mem_mb},
     }
 
@@ -414,9 +184,9 @@ def home(request: Request):
             "title": "FDV-QUANTS",
             "endpoints": [
                 {"method": "GET", "path": "/home", "desc": "Home - navigation"},
-                {"method": "GET", "path": "/dashboard", "desc": "Trading opportunities dashboard"},
-                {"method": "GET", "path": "/gallery", "desc": "Chart gallery"},
                 {"method": "GET", "path": "/bond-pricer", "desc": "Bond pricer for US/EU"},
+                {"method": "GET", "path": "/yield-curve", "desc": "Interest rate curve calculator"},
+                {"method": "GET", "path": "/gallery", "desc": "PDF reports gallery"},
                 {"method": "GET", "path": "/health", "desc": "Health check"},
                 {"method": "GET", "path": "/", "desc": "API root"},
                 {"method": "POST", "path": "/scan", "desc": "Scan for trading opportunities (requires API key)"},
@@ -424,72 +194,6 @@ def home(request: Request):
             ],
         },
     )
-
-
-def _categorize_opportunities(opportunities: List[Dict]) -> Dict[str, List[Dict]]:
-    """
-    Categorize opportunities into 'On Sale' (undervalued) and 'Overbought' (overvalued).
-    
-    Args:
-        opportunities: List of opportunity dictionaries
-        
-    Returns:
-        Dictionary with 'on_sale' and 'overbought' lists
-    """
-    on_sale = []
-    overbought = []
-    
-    undervalued_keywords = [
-        "oversold", "lower", "support", "below", "buy", "bullish",
-        "at lower", "RSI oversold", "Price at lower"
-    ]
-    
-    overbought_keywords = [
-        "overbought", "upper", "resistance", "above", "sell", "bearish",
-        "at upper", "RSI overbought", "Price at upper"
-    ]
-    
-    for opp in opportunities:
-        reasons = " ".join(opp.get("reasons", [])).lower()
-        signal = opp.get("signal", "").upper()
-        
-        # Check for undervalued indicators
-        is_undervalued = any(keyword in reasons for keyword in undervalued_keywords) or signal == "BUY"
-        
-        # Check for overbought indicators  
-        is_overvalued = any(keyword in reasons for keyword in overbought_keywords) or signal == "SELL"
-        
-        # Categorize based on RSI if available
-        rsi_match = None
-        for reason in opp.get("reasons", []):
-            if "RSI" in reason:
-                if "oversold" in reason.lower():
-                    is_undervalued = True
-                    rsi_match = "oversold"
-                elif "overbought" in reason.lower():
-                    is_overvalued = True
-                    rsi_match = "overbought"
-                break
-        
-        # Prioritize RSI-based categorization
-        if rsi_match == "oversold":
-            on_sale.append(opp)
-        elif rsi_match == "overbought":
-            overbought.append(opp)
-        elif is_undervalued and not is_overvalued:
-            on_sale.append(opp)
-        elif is_overvalued and not is_undervalued:
-            overbought.append(opp)
-        # If both or neither, use signal type
-        elif signal == "BUY":
-            on_sale.append(opp)
-        elif signal == "SELL":
-            overbought.append(opp)
-    
-    return {
-        "on_sale": on_sale,
-        "overbought": overbought
-    }
 
 
 def _build_bond_cashflows(face_value: float, coupon_rate_pct: float, years_to_maturity: float, frequency: int) -> List[Dict[str, float]]:
@@ -583,6 +287,401 @@ def bond_pricer_page(request: Request):
             "presets_json": json.dumps(BOND_PRESETS),
         },
     )
+
+
+@app.get("/yield-curve", response_class=HTMLResponse)
+def yield_curve_page(request: Request):
+    """Yield curve calculator page"""
+    return templates.TemplateResponse(
+        "yield_curve.html",
+        {
+            "request": request,
+            "title": "Interest Rate Curve Calculator",
+        },
+    )
+
+
+class YieldCurveRequest(BaseModel):
+    tenors: Optional[List[float]] = None
+    rates: Optional[List[float]] = None
+    bonds: Optional[List[Dict[str, Any]]] = None
+    interpolation: str = "cubic_spline"
+    compounding: str = "simple"
+
+
+class IndexCurveRequest(BaseModel):
+    """Request for index-based curve construction (Murex-style)"""
+    index_code: Optional[str] = None  # Single index (e.g., "SOFR")
+    index_rates: Optional[Dict[str, List[Dict[str, Any]]]] = None  # Multiple indexes
+    primary_index: Optional[str] = None  # Primary index for multi-index curves
+    interpolation: str = "cubic_spline"
+    day_count: Optional[str] = None
+    compounding: Optional[str] = None
+
+
+@app.get("/api/yield-curve/fetch-real")
+def fetch_real_treasury_yields():
+    """
+    Fetch real US Treasury yields from FRED API.
+    Fast implementation with caching and parallel requests.
+    """
+    try:
+        if not settings.fred_api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="FRED API key not configured. Add FRED_API_KEY to your .env file. Get a free key at https://fred.stlouisfed.org/docs/api/api_key.html"
+            )
+
+        fred_client = FREDClient(api_key=settings.fred_api_key)
+        data = fred_client.get_yield_curve_data()
+        
+        return {
+            "success": True,
+            "data": data,
+            "message": "Real market data fetched successfully"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error fetching FRED data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch Treasury yields: {str(e)}")
+
+
+@app.get("/api/yield-curve/presets")
+def get_yield_curve_presets():
+    """
+    Get available yield curve presets with real market data where available.
+    Returns example curves for demonstration purposes.
+    """
+    try:
+        # Try to fetch real US Treasury data using yfinance
+        real_ust_data = None
+        try:
+            import yfinance as yf
+            # US Treasury symbols: ^IRX (3mo), ^FVX (5Y), ^TNX (10Y), ^TYX (30Y)
+            # Note: yfinance has limited Treasury data, so we'll use example data
+            # In production, you'd use a Treasury API like FRED or TreasuryDirect
+            pass
+        except:
+            pass
+        
+        # Return presets using official Treasury terminology
+        # Official names per U.S. Treasury: "Market Yield on U.S. Treasury Securities at X-Year Constant Maturity"
+        # Standard yield curve shapes: Normal, Inverted, Steep, Flat, Humped
+        return {
+            "presets": {
+                "ust_par_yield_curve": {
+                    "name": "Treasury Par Yield Curve",
+                    "description": "U.S. Treasury Par Yield Curve (Constant Maturity Rates)",
+                    "source": "U.S. Department of the Treasury methodology",
+                    "tenors": [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
+                    "rates": [5.25, 5.30, 5.35, 5.20, 5.10, 4.95, 4.85, 4.75, 4.90, 4.95],
+                },
+                "ust_normal_yield_curve": {
+                    "name": "Normal Yield Curve",
+                    "description": "Upward-sloping yield curve (normal market conditions)",
+                    "source": "Standard yield curve shape",
+                    "tenors": [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
+                    "rates": [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.4, 3.5],
+                },
+                "ust_inverted_yield_curve": {
+                    "name": "Inverted Yield Curve",
+                    "description": "Downward-sloping yield curve (recession indicator)",
+                    "source": "Standard yield curve shape",
+                    "tenors": [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
+                    "rates": [5.5, 5.4, 5.3, 5.2, 5.1, 5.0, 4.9, 4.8, 4.7, 4.6],
+                },
+                "euro_area_government_bonds": {
+                    "name": "Euro Area Government Bond Yields",
+                    "description": "Eurozone sovereign bond yield curve",
+                    "source": "ECB methodology",
+                    "tenors": [0.25, 0.5, 1, 2, 3, 5, 7, 10, 15, 20],
+                    "rates": [3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1],
+                }
+            },
+            "note": "Reference yield curves for analysis. For live market data, use the 'Fetch Real Treasury Yields (FRED)' button."
+        }
+    except Exception as e:
+        logger.error(f"Error getting presets: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to get presets: {str(e)}")
+
+
+@app.post("/api/yield-curve/calculate")
+def calculate_yield_curve(req: YieldCurveRequest):
+    """
+    Calculate yield curve metrics from tenors/rates or bootstrap from bonds.
+    """
+    try:
+        if req.bonds is not None:
+            # Bootstrap from bonds
+            curve = CurveFactory.create_from_bonds(
+                bonds=req.bonds,
+                bootstrapper_type="bond",
+                interpolation=req.interpolation,
+                compounding=req.compounding,
+            )
+        elif req.tenors is not None and req.rates is not None:
+            # Create from manual input
+            curve = CurveFactory.create_spot_curve(
+                tenors=req.tenors,
+                rates=req.rates,
+                interpolation=req.interpolation,
+                compounding=req.compounding,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either (tenors, rates) or bonds",
+            )
+
+        # Calculate metrics - use interpolation/extrapolation to get values
+        max_tenor = float(curve.tenors.max())
+        min_tenor = float(curve.tenors.min())
+        
+        # Calculate 3-year metrics (will interpolate/extrapolate if needed)
+        spot_3y = None
+        df_3y = None
+        zc_price_3y = None
+        try:
+            spot_3y = curve.spot_rate(3.0)
+            df_3y = curve.discount_factor(3.0)
+            zc_price_3y = curve.zero_coupon_price(3.0, 100.0)
+        except Exception as e:
+            logger.warning(f"Could not calculate 3-year metrics: {e}")
+        
+        # Calculate forward rate (2Y to 5Y) - will extrapolate if needed
+        forward_2y_5y = None
+        try:
+            if max_tenor >= 2.0:
+                # Try to get forward rate, extrapolating if needed
+                forward_2y_5y = curve.forward_rate(2.0, 5.0)
+        except Exception as e:
+            logger.warning(f"Could not calculate forward rate 2Y->5Y: {e}")
+            # Try a shorter forward rate if 5Y is too far
+            if max_tenor >= 2.0:
+                try:
+                    # Use max_tenor if it's between 2 and 5, or use 2.5 if max is less
+                    end_tenor = min(5.0, max(2.5, max_tenor))
+                    if end_tenor > 2.0:
+                        forward_2y_5y = curve.forward_rate(2.0, end_tenor)
+                except:
+                    pass
+
+        # Build curve data table with all points
+        curve_data = []
+        for i, (tenor, rate) in enumerate(zip(curve.tenors, curve.rates)):
+            try:
+                df = curve.discount_factor(tenor)
+                curve_data.append({
+                    "tenor": float(tenor),
+                    "rate": float(rate),
+                    "discount_factor": float(df),
+                })
+            except Exception as e:
+                logger.warning(f"Error calculating discount factor for tenor {tenor}: {e}")
+
+        # Add some interpolated points for better visualization
+        if len(curve_data) > 0:
+            # Add midpoint if there's a gap
+            if max_tenor > min_tenor:
+                mid_tenor = (min_tenor + max_tenor) / 2
+                if mid_tenor not in [p["tenor"] for p in curve_data]:
+                    try:
+                        mid_rate = curve.spot_rate(mid_tenor)
+                        mid_df = curve.discount_factor(mid_tenor)
+                        curve_data.append({
+                            "tenor": float(mid_tenor),
+                            "rate": float(mid_rate),
+                            "discount_factor": float(mid_df),
+                        })
+                        # Sort by tenor
+                        curve_data.sort(key=lambda x: x["tenor"])
+                    except:
+                        pass
+
+        return {
+            "spot_3y": spot_3y,
+            "df_3y": df_3y,
+            "forward_2y_5y": forward_2y_5y,
+            "zc_price_3y": zc_price_3y,
+            "curve_data": curve_data,
+            "max_tenor": max_tenor,
+            "min_tenor": min_tenor,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating yield curve: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to calculate yield curve: {str(e)}")
+
+
+@app.get("/api/yield-curve/indexes")
+def list_available_indexes(currency: Optional[str] = None):
+    """
+    List available interest rate indexes (similar to Murex index definitions).
+    
+    Args:
+        currency: Optional currency filter (USD, EUR, GBP, etc.)
+        
+    Returns:
+        Dict of available indexes with their properties
+    """
+    try:
+        indexes = IndexCurveFactory.list_available_indexes(currency=currency)
+        all_indexes = IndexRegistry.list_all()
+        
+        result = {}
+        for code, name in indexes.items():
+            index_def = all_indexes[code]
+            result[code] = {
+                "code": index_def.code,
+                "name": index_def.name,
+                "currency": index_def.currency,
+                "index_type": index_def.index_type.value,
+                "day_count": index_def.day_count,
+                "compounding": index_def.compounding,
+                "fixing_frequency": index_def.fixing_frequency,
+                "description": index_def.description,
+            }
+        
+        return {
+            "indexes": result,
+            "count": len(result),
+            "currency_filter": currency,
+        }
+    except Exception as e:
+        logger.error(f"Error listing indexes: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list indexes: {str(e)}")
+
+
+@app.post("/api/yield-curve/from-index")
+def calculate_yield_curve_from_index(req: IndexCurveRequest):
+    """
+    Calculate yield curve from interest rate indexes (Murex-style).
+    
+    Supports:
+    - Single index curve (e.g., SOFR curve)
+    - Multi-index curve (combining SOFR, LIBOR, swaps, etc.)
+    
+    Example single index:
+    {
+        "index_code": "SOFR",
+        "index_rates": {
+            "SOFR": [
+                {"tenor": 0.25, "rate": 0.05},
+                {"tenor": 0.5, "rate": 0.051},
+                {"tenor": 1.0, "rate": 0.052}
+            ]
+        }
+    }
+    
+    Example multi-index:
+    {
+        "index_rates": {
+            "SOFR": [{"tenor": 0.25, "rate": 0.05}],
+            "USD-LIBOR-3M": [{"tenor": 0.5, "rate": 0.052}]
+        },
+        "primary_index": "SOFR"
+    }
+    """
+    try:
+        if req.index_code and req.index_rates:
+            # Single index specified
+            if req.index_code not in req.index_rates:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"index_code '{req.index_code}' not found in index_rates"
+                )
+            curve = IndexCurveFactory.create_from_index(
+                index_code=req.index_code,
+                index_rates=req.index_rates[req.index_code],
+                interpolation=req.interpolation,
+                day_count=req.day_count,
+                compounding=req.compounding,
+            )
+        elif req.index_rates:
+            # Multi-index curve
+            curve = IndexCurveFactory.create_from_multiple_indexes(
+                index_rates=req.index_rates,
+                primary_index=req.primary_index,
+                interpolation=req.interpolation,
+                day_count=req.day_count or "ACT/360",
+                compounding=req.compounding or "simple",
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either index_code with index_rates, or index_rates dict"
+            )
+        
+        # Calculate metrics (same as regular curve)
+        max_tenor = float(curve.tenors.max())
+        min_tenor = float(curve.tenors.min())
+        
+        spot_3y = None
+        df_3y = None
+        zc_price_3y = None
+        try:
+            spot_3y = curve.spot_rate(3.0)
+            df_3y = curve.discount_factor(3.0)
+            zc_price_3y = curve.zero_coupon_price(3.0, 100.0)
+        except Exception as e:
+            logger.warning(f"Could not calculate 3-year metrics: {e}")
+        
+        forward_2y_5y = None
+        try:
+            if max_tenor >= 2.0:
+                forward_2y_5y = curve.forward_rate(2.0, 5.0)
+        except Exception as e:
+            logger.warning(f"Could not calculate forward rate 2Y->5Y: {e}")
+        
+        # Build curve data
+        curve_data = []
+        for tenor, rate in zip(curve.tenors, curve.rates):
+            try:
+                df = curve.discount_factor(tenor)
+                curve_data.append({
+                    "tenor": float(tenor),
+                    "rate": float(rate),
+                    "discount_factor": float(df),
+                })
+            except Exception as e:
+                logger.warning(f"Error calculating discount factor for tenor {tenor}: {e}")
+        
+        # Add interpolated points for visualization
+        if len(curve_data) > 0 and max_tenor > min_tenor:
+            import numpy as np
+            interpolated_tenors = np.linspace(min_tenor, max_tenor, 100)
+            for t in interpolated_tenors:
+                if not any(abs(p["tenor"] - t) < 0.01 for p in curve_data):
+                    try:
+                        interpolated_rate = curve.spot_rate(t)
+                        interpolated_df = curve.discount_factor(t)
+                        curve_data.append({
+                            "tenor": float(t),
+                            "rate": float(interpolated_rate),
+                            "discount_factor": float(interpolated_df),
+                            "interpolated": True
+                        })
+                    except Exception:
+                        pass
+            curve_data.sort(key=lambda x: x["tenor"])
+        
+        return {
+            "spot_3y": spot_3y,
+            "df_3y": df_3y,
+            "forward_2y_5y": forward_2y_5y,
+            "zc_price_3y": zc_price_3y,
+            "curve_data": curve_data,
+            "min_tenor": min_tenor,
+            "max_tenor": max_tenor,
+            "curve_type": "index_based",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating index-based yield curve: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to calculate index-based curve: {str(e)}")
 
 
 @app.post("/api/bond/price")
@@ -946,288 +1045,6 @@ def scan_sector(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/market/overview")
-def market_overview(
-    request: Request,
-    threshold: float = Query(0.2, description="Threshold for opportunities"),
-    demo: bool = Query(False, description="Demo mode flag"),
-    sectors: Optional[str] = Query(None, description="Comma-separated list of sectors"),
-    asset_types: Optional[str] = Query(None, description="Comma-separated list of asset types")
-):
-    """
-    Get market overview with top opportunities across all sectors
-    """
-    try:
-        # Check cache first
-        cache_key = _get_dashboard_cache_key(threshold, sectors, asset_types, demo)
-        if cache_key in dashboard_cache:
-            logger.info(f"Dashboard cache hit for key: {cache_key}")
-            cached_result = dashboard_cache[cache_key]
-            return templates.TemplateResponse(
-                "dashboard.html",
-                {
-                    "request": request,
-                    "opportunities": cached_result["opportunities"],
-                    "on_sale": cached_result["on_sale"],
-                    "overbought": cached_result["overbought"],
-                    "title": "Premium Trading Dashboard",
-                    "threshold": threshold,
-                    "count": cached_result["count"],
-                    "failed_sources": cached_result["failed_sources"],
-                    "demo_mode": demo,
-                    "asset_type_counts": cached_result["asset_type_counts"],
-                },
-            )
-        
-        # Get top opportunities from each sector
-        sector_opportunities = {}
-        
-        for sector in Sector:
-            # Get top 3 from each sector
-            symbols = list(MARKET_SYMBOLS[sector])[:10]  # Scan top 10, return top 3
-            
-            opportunities = shared_scanner.scan_stocks(
-                symbols=symbols,
-                min_confidence=0.5,
-                asset_type=AssetType.STOCK.value,
-                full_analysis=False,
-                historical_years=0.5
-            )
-            
-            if opportunities:
-                sector_opportunities[sector.value] = opportunities[:3]
-        
-        # Get crypto, forex, commodities highlights
-        other_opportunities = {
-            "crypto": shared_scanner.scan_stocks(
-                symbols=CRYPTO_SYMBOLS[:5],
-                min_confidence=0.5,
-                asset_type=AssetType.CRYPTO.value,
-                full_analysis=False,
-                historical_years=0.25
-            )[:3],
-            "forex": shared_scanner.scan_stocks(
-                symbols=FOREX_PAIRS[:5],
-                min_confidence=0.5,
-                asset_type=AssetType.FOREX.value,
-                full_analysis=False,
-                historical_years=0.25
-            )[:3],
-            "commodities": shared_scanner.scan_stocks(
-                symbols=COMMODITIES[:5],
-                min_confidence=0.5,
-                asset_type=AssetType.METAL.value,
-                full_analysis=False,
-                historical_years=0.25
-            )[:3]
-        }
-        
-        return {
-            "timestamp": datetime.now().isoformat(),
-            "sectors": sector_opportunities,
-            "other_assets": other_opportunities,
-            "market_summary": {
-                "total_opportunities": sum(len(opps) for opps in sector_opportunities.values()) + 
-                                       sum(len(opps) for opps in other_opportunities.values()),
-                "top_sectors": sorted(
-                    [(sector, len(opps)) for sector, opps in sector_opportunities.items() if opps],
-                    key=lambda x: x[1],
-                    reverse=True
-                )[:3]
-            }
-        }
-        
-    except Exception as e:
-        logger.error(f"Error generating market overview: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request, threshold: float = 0.2, demo: bool = False, 
-             sectors: Optional[str] = None, asset_types: Optional[str] = None):
-    """
-    Enhanced dashboard with sector filtering and 200+ symbols support.
-    
-    Args:
-        threshold: Minimum confidence threshold (0.0-1.0). Lower values show more signals.
-        demo: If True, force sample data for all symbols (bypasses live data fetch).
-        sectors: Comma-separated list of sectors to include (e.g., "Information Technology,Health Care")
-        asset_types: Comma-separated list of additional asset types (e.g., "crypto,forex,commodities")
-    """
-    try:
-        # Try to hydrate preload snapshot from Redis if memory state is empty (e.g., after restart)
-        global last_preload_opportunities, last_preload_stats, last_preload_timestamp
-        if not last_preload_opportunities:
-            snapshot = _load_preload_snapshot()
-            if snapshot:
-                last_preload_opportunities = snapshot.get("opps", [])
-                last_preload_stats = snapshot.get("stats", {})
-                last_preload_timestamp = snapshot.get("timestamp")
-
-        # Check cache first
-        cache_key = _get_dashboard_cache_key(threshold, sectors, asset_types, demo)
-        if cache_key in dashboard_cache:
-            logger.info(f"Dashboard cache hit for key: {cache_key}")
-            cached_result = dashboard_cache[cache_key]
-            return templates.TemplateResponse(
-                "dashboard.html",
-                {
-                    "request": request,
-                    "opportunities": cached_result["opportunities"],
-                    "on_sale": cached_result["on_sale"],
-                    "overbought": cached_result["overbought"],
-                    "title": "Premium Trading Dashboard",
-                    "threshold": threshold,
-                    "count": cached_result["count"],
-                    "failed_sources": cached_result["failed_sources"],
-                    "demo_mode": demo,
-                    "asset_type_counts": cached_result["asset_type_counts"],
-                },
-            )
-        
-        # Build symbol list based on filters
-        all_symbols = []
-        
-        # Process sector filters
-        selected_sectors = None
-        if sectors:
-            selected_sectors_list = [s.strip() for s in sectors.split(",") if s.strip()]
-            selected_sectors = set(selected_sectors_list)
-            for sector in Sector:
-                if sector.value in selected_sectors:
-                    all_symbols.extend(MARKET_SYMBOLS[sector])
-        else:
-            # Default: use a subset of symbols from each sector
-            for sector, symbols in MARKET_SYMBOLS.items():
-                all_symbols.extend(symbols[:2])  # Top 2 from each sector
-        
-        # Add additional asset types if selected
-        selected_asset_types = None
-        if asset_types:
-            selected_types = [t.strip().lower() for t in asset_types.split(",") if t.strip()]
-            selected_asset_types = set(selected_types)
-            if "crypto" in selected_types:
-                all_symbols.extend(CRYPTO_SYMBOLS[:5])  # Top 5 cryptos
-            if "forex" in selected_types:
-                all_symbols.extend(FOREX_PAIRS[:5])    # Top 5 forex pairs
-            if "commodities" in selected_types:
-                all_symbols.extend(COMMODITIES[:4])     # Top 4 commodities
-        
-        # Ensure threshold is valid (0.0 to 1.0)
-        threshold = max(0.0, min(1.0, threshold))
-        
-        # Track failed data sources
-        failed_sources = []
-        asset_type_counts = {}
-        
-        if demo:
-            logger.info("Demo mode active: Using sample data for all symbols")
-        
-        # Prefer preloaded snapshot when available and recent
-        all_opps: List[Dict[str, Any]] = []
-        used_preloaded = False
-        if last_preload_opportunities and last_preload_timestamp:
-            age_sec = (datetime.utcnow() - last_preload_timestamp).total_seconds()
-            if age_sec <= PRELOAD_RETENTION_SECONDS * 2:
-                preloaded_filtered = _filter_opportunities(
-                    last_preload_opportunities,
-                    threshold,
-                    selected_sectors,
-                    selected_asset_types,
-                )
-                if preloaded_filtered:
-                    all_opps = preloaded_filtered
-                    used_preloaded = True
-                    logger.info("Served dashboard from preloaded snapshot (age %.1fs, %s items)", age_sec, len(all_opps))
-                    for opp in all_opps:
-                        at = str(opp.get("asset_type", "")).lower()
-                        asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
-
-        # If preloaded data insufficient, run live scans
-        if not all_opps:
-            symbols_by_type: Dict[str, List[str]] = {}
-            for symbol in all_symbols:
-                asset_type = _get_asset_type(symbol)
-                if asset_type.value not in symbols_by_type:
-                    symbols_by_type[asset_type.value] = []
-                symbols_by_type[asset_type.value].append(symbol)
-            
-            for asset_type_value, symbols in symbols_by_type.items():
-                try:
-                    opps = shared_scanner.scan_stocks(
-                        symbols,
-                        min_confidence=threshold,
-                        asset_type=asset_type_value,
-                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
-                        full_analysis=False,
-                        historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
-                    )
-                    all_opps.extend(opps)
-                    asset_type_counts[asset_type_value] = len(opps)
-                    logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols (live scan)")
-                except Exception as e:
-                    logger.error(f"Error scanning {asset_type_value} symbols: {e}")
-                    failed_sources.append(f"{asset_type_value}_scanner")
-
-            # If still empty, fall back to last preload unfiltered
-            if not all_opps and last_preload_opportunities:
-                logger.warning("Using last preloaded opportunities as fallback (no live results).")
-                all_opps = list(last_preload_opportunities)
-                for opp in all_opps:
-                    at = str(opp.get("asset_type", "")).lower()
-                    asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
-        
-        # Categorize opportunities
-        categorized = _categorize_opportunities(all_opps)
-        
-        # Store in cache
-        dashboard_cache[cache_key] = {
-            "opportunities": all_opps,
-            "on_sale": categorized["on_sale"],
-            "overbought": categorized["overbought"],
-            "count": len(all_opps),
-            "failed_sources": failed_sources,
-            "asset_type_counts": asset_type_counts,
-        }
-        logger.info(f"Dashboard results cached with key: {cache_key} (used_preloaded={used_preloaded}, count={len(all_opps)})")
-        
-        return templates.TemplateResponse(
-            "dashboard.html",
-            {
-                "request": request,
-                "opportunities": all_opps,
-                "on_sale": categorized["on_sale"],
-                "overbought": categorized["overbought"],
-                "title": "Premium Trading Dashboard",
-                "threshold": threshold,
-                "count": len(all_opps),
-                "failed_sources": failed_sources,
-                "demo_mode": demo,
-                "asset_type_counts": asset_type_counts,
-            },
-        )
-    except Exception as e:
-        logger.error(f"Dashboard error: {e}", exc_info=True)
-        # Return error page
-        return templates.TemplateResponse(
-            "dashboard.html",
-            {
-                "request": request,
-                "opportunities": [],
-                "on_sale": [],
-                "overbought": [],
-                "title": "Premium Trading Dashboard - Error",
-                "threshold": threshold,
-                "count": 0,
-                "failed_sources": [f"Dashboard error: {str(e)}"],
-                "demo_mode": False,
-                "asset_type_counts": {},
-                "error": str(e),
-            },
-        )
-
-
 
 @app.post("/api/watchlist")
 def add_to_watchlist(symbol: str = Query(...)):
@@ -1554,19 +1371,20 @@ def generate_pdf_report(symbol: str, signal_type: Optional[str] = None):
 @app.get("/gallery", response_class=HTMLResponse)
 def gallery(request: Request):
     """
-    Image gallery for generated charts (served from output/).
+    Gallery of generated PDF reports (served from output/).
     """
     output_dir = "output"
     files = []
     if os.path.isdir(output_dir):
         files = sorted(
-            [f for f in os.listdir(output_dir) if f.lower().endswith(".png")]
+            [f for f in os.listdir(output_dir) if f.lower().endswith(".pdf")],
+            reverse=True  # Most recent first
         )
     return templates.TemplateResponse(
         "gallery.html",
         {
             "request": request,
             "files": files,
-            "title": "Chart Gallery",
+            "title": "PDF Reports Gallery",
         },
     )

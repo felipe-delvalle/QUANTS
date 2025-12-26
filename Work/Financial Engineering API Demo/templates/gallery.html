@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ title }}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #0b1221;
+      color: #e8edf6;
+      line-height: 1.6;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #5de0e6;
+      margin-bottom: 10px;
+    }
+    .subtitle {
+      color: #a0a8b8;
+      margin-bottom: 24px;
+      font-size: 14px;
+    }
+    .back-link {
+      display: inline-block;
+      color: #5de0e6;
+      text-decoration: none;
+      margin-bottom: 20px;
+      padding: 8px 16px;
+      background: #111829;
+      border: 1px solid #243047;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    .back-link:hover {
+      background: #243047;
+      border-color: #5de0e6;
+    }
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: #a0a8b8;
+    }
+    .empty-state h2 {
+      color: #5de0e6;
+      margin-bottom: 12px;
+    }
+    .empty-state p {
+      margin-bottom: 20px;
+    }
+    .empty-state code {
+      background: #111829;
+      padding: 4px 8px;
+      border-radius: 4px;
+      color: #5de0e6;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+      margin-top: 24px;
+    }
+    .card {
+      background: #111829;
+      border: 1px solid #243047;
+      border-radius: 8px;
+      padding: 20px;
+      transition: all 0.2s;
+      display: flex;
+      flex-direction: column;
+    }
+    .card:hover {
+      border-color: #5de0e6;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(93, 224, 230, 0.1);
+    }
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .pdf-icon {
+      font-size: 32px;
+    }
+    .card-title {
+      flex: 1;
+      color: #e8edf6;
+      font-weight: 600;
+      font-size: 16px;
+      word-break: break-word;
+    }
+    .card-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: auto;
+      padding-top: 16px;
+    }
+    .btn {
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      transition: all 0.2s;
+      text-decoration: none;
+      display: inline-block;
+      text-align: center;
+    }
+    .btn-primary {
+      background: #5de0e6;
+      color: #0b1221;
+    }
+    .btn-primary:hover {
+      background: #4bc4ca;
+    }
+    .btn-secondary {
+      background: #243047;
+      color: #e8edf6;
+      border: 1px solid #243047;
+    }
+    .btn-secondary:hover {
+      background: #182035;
+      border-color: #5de0e6;
+    }
+    .file-info {
+      color: #a0a8b8;
+      font-size: 12px;
+      margin-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/home" class="back-link">← Back to Home</a>
+    <h1>{{ title }}</h1>
+    <p class="subtitle">Browse and download generated financial analysis reports</p>
+
+    {% if files|length == 0 %}
+    <div class="empty-state">
+      <h2>No Reports Yet</h2>
+      <p>PDF reports will appear here once generated.</p>
+      <p>Generate a report by calling:</p>
+      <code>/api/report/{symbol}</code>
+      <p style="margin-top: 20px;">
+        <a href="/home" style="color: #5de0e6;">← Return to Home</a>
+      </p>
+    </div>
+    {% else %}
+    <div class="grid">
+      {% for file in files %}
+      <div class="card">
+        <div class="card-header">
+          <span class="pdf-icon">📄</span>
+          <div class="card-title">{{ file }}</div>
+        </div>
+        <div class="file-info">
+          Generated financial analysis report
+        </div>
+        <div class="card-actions">
+          <a href="/output/{{ file }}" class="btn btn-primary" target="_blank" download>Download</a>
+          <a href="/output/{{ file }}" class="btn btn-secondary" target="_blank">View</a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>
+

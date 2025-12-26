@@ -1,0 +1,5 @@
+#!/usr/bin/osascript
+tell application "Cursor"
+    activate
+end tell
+

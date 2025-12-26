@@ -3,9 +3,11 @@
 ## Working with Other AI Assistants
 
 ### When to Collaborate:
-- **Continue.dev (GPT-5.1-Codex-Max)**: Use for code analysis, questions, and reviews
-- **GitHub Copilot**: Leverage inline suggestions for quick completions
-- **Other AIs**: Coordinate when user explicitly requests multi-AI workflow
+- **Cursor Chat (Primary)**: Use for most tasks - code changes, debugging, explanations, refactoring. Cursor's context awareness and codebase understanding are excellent for most scenarios.
+- **Cursor Codebase Search**: Leverage Cursor's built-in semantic search before considering external tools. It's fast, accurate, and understands your codebase structure.
+- **Continue.dev / Codex Max**: Use for deep analysis, complex architectural decisions, or when you need to reference multiple large files simultaneously. Best for review and analysis phases.
+- **GitHub Copilot**: Use for inline autocomplete and quick single-line completions. Let it handle routine typing while you focus on structure and logic.
+- **External Tools**: Only use when Cursor's capabilities are insufficient or user explicitly requests. Don't default to external tools - Cursor alone handles most tasks effectively.
 
 ### Collaboration Patterns:
 
@@ -27,6 +29,7 @@
 
 ### Best Practices:
 - Acknowledge when another AI's input would be helpful
+- Tell the user when a better mode is suited Agent, Plan, Ask or Debug
 - Don't duplicate work - use context from other AIs
 - Suggest the right AI for the right task
 - Work together, not in competition
@@ -38,8 +41,8 @@
 - Review my changes with Continue when appropriate
 
 ### Goal Collaboration:
-- **Always check `Work/ai_goals.md`** before starting work to see active goals
-- **Check `Work/codex_cursor_channel.md`** for real-time coordination messages
+- **Always check `Work/Financial Engineering API Demo/PROJECT_SUMMARY.md` and `Work/ai_goals.md`** before starting work to see active goals and project summary for the Financial Engineering project
+- You are only allowed to change `PROJECT_SUMMARY.md` when really needed.
 - Update progress logs in `ai_goals.md` when working on goals
 - Update status tags: [NEW] → [IN_PROGRESS] → [CURSOR_TURN] → [CODEX_TURN] → [COMPLETE]
 - When assigned a task, execute it and update the progress log
@@ -51,8 +54,22 @@
 - After making significant changes, suggest running: `./.scripts/auto_commit.sh` or `gac "description"`
 - Before finishing a session, remind: "Don't forget to commit your changes!"
 - When user accepts changes, suggest: "Changes accepted! Run `./.scripts/auto_commit.sh` to save them."
+- Stay in the same dev branch as the one being worked on
 - For feature branches, remind about creating PRs before merging to main
 - Use meaningful commit messages that describe what was changed
 - Check git status before suggesting commits: `git status` or `gs`
 - If working on a feature, remind about PR workflow: create PR, get review, then merge
+
+### Testing & Verification Methodology:
+- **ALWAYS test before reporting success**: Never claim something works without testing it first
+- **Test iteratively**: Test each change immediately before moving to the next improvement
+- **Test syntax/validation first**: Verify code compiles, scripts have valid syntax, configurations are correct
+- **Test logic/calculations**: Verify detection logic, calculations, and decision-making work correctly with actual data
+- **Test execution**: Run the code/script/command and verify it executes without errors (even if the operation fails, the code should not error)
+- **Test edge cases**: Test with different inputs, boundary conditions, and error scenarios
+- **Report test results**: Always include what was tested, the results, and any errors encountered - don't just say "it works"
+- **Error handling**: Implement proper error handling, suppress expected errors when appropriate, ensure graceful failures
+- **Fallback logic**: When primary operations fail, implement intelligent fallbacks to achieve the intended result
+- **Verify assumptions**: Test that your assumptions about system state, data format, or behavior are correct
+- **Test with real data**: Use actual current state/data, not hypothetical examples
 

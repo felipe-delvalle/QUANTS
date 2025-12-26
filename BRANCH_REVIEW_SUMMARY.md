@@ -141,3 +141,17 @@ git merge feature/staged-changes
 4. Test the dashboard
 
 The website should work as you had it before!
+
+
+
+
+
+
+
+
+
+
+
+
+
+

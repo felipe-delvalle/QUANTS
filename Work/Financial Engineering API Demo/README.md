@@ -30,6 +30,7 @@ This project demonstrates:
 - ✅ Portfolio risk analysis (VaR, CVaR, Sharpe Ratio)
 - ✅ Real-time market data fetching
 - ✅ GitHub API integration for project management
+- ✅ **Microsoft Teams Planner automation** (create tasks, sync goals)
 - ✅ Automated report generation
 - ✅ RESTful API server
 - ✅ CLI interface
@@ -69,6 +70,12 @@ YAHOO_FINANCE_ENABLED=true
 # GitHub API
 GITHUB_TOKEN=your_github_token
 GITHUB_REPO=your_username/your_repo
+
+# Microsoft Teams Planner (optional)
+MS_CLIENT_ID=your-azure-app-client-id
+MS_CLIENT_SECRET=your-azure-app-secret
+MS_TENANT_ID=your-azure-tenant-id
+MS_GROUP_ID=your-microsoft-365-group-id
 
 # Optional APIs
 FRED_API_KEY=your_fred_key
