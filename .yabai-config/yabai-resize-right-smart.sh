@@ -23,10 +23,13 @@ if [ "$SPLIT_CHILD" = "first_child" ]; then
     # LEFT window - directly resize right
     yabai -m window --resize right:50:0 2>/dev/null || true
 else
-    # RIGHT window - use opposing window (left) to resize
+    # RIGHT window - use opposing window strategy
     OPPOSING_WINDOW=$(yabai -m query --windows | jq -r ".[] | select(.display == $CURRENT_DISPLAY and .\"split-type\" == \"vertical\" and .\"split-child\" == \"first_child\" and .id != $CURRENT_ID) | .id" | head -1)
     if [ -n "$OPPOSING_WINDOW" ]; then
-        # Resize the left window to push divider right (expands right window)
-        yabai -m window "$OPPOSING_WINDOW" --resize right:50:0 2>/dev/null || true
+        # Try direct resize first: resize left:-50 pushes divider right
+        if ! yabai -m window --resize left:-50:0 2>/dev/null; then
+            # Fallback: shrink left window from right, moving divider left to expand right window
+            yabai -m window "$OPPOSING_WINDOW" --resize right:-50:0 2>/dev/null || true
+        fi
     fi
 fi
