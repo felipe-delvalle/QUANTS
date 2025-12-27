@@ -217,24 +217,34 @@
     let yieldCurveChart = null;
 
     // Reference yield curves using official Treasury terminology
+    // Official names per U.S. Treasury: "Market Yield on U.S. Treasury Securities at X-Year Constant Maturity"
+    // Standard yield curve shapes: Normal, Inverted, Steep, Flat, Humped
     const PRESETS = {
       ust_par_yield_curve: {
         name: "Treasury Par Yield Curve",
+        description: "U.S. Treasury Par Yield Curve (Constant Maturity Rates)",
+        source: "U.S. Department of the Treasury methodology",
         tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
         rates: [5.25, 5.30, 5.35, 5.20, 5.10, 4.95, 4.85, 4.75, 4.90, 4.95],
       },
       ust_normal_yield_curve: {
         name: "Normal Yield Curve",
+        description: "Upward-sloping yield curve (normal market conditions)",
+        source: "Standard yield curve shape",
         tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
         rates: [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.4, 3.5],
       },
       ust_inverted_yield_curve: {
         name: "Inverted Yield Curve",
+        description: "Downward-sloping yield curve (recession indicator)",
+        source: "Standard yield curve shape",
         tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
         rates: [5.5, 5.4, 5.3, 5.2, 5.1, 5.0, 4.9, 4.8, 4.7, 4.6],
       },
       euro_area_government_bonds: {
         name: "Euro Area Government Bond Yields",
+        description: "Eurozone sovereign bond yield curve",
+        source: "ECB methodology",
         tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 15, 20],
         rates: [3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1],
       }
@@ -263,7 +273,9 @@
 
     function initializeChart() {
       const ctx = document.getElementById('yieldCurveChart');
-      if (yieldCurveChart) yieldCurveChart.destroy();
+      if (yieldCurveChart) {
+        yieldCurveChart.destroy();
+      }
       
       yieldCurveChart = new Chart(ctx, {
         type: 'line',
@@ -278,32 +290,61 @@
             fill: true,
             tension: 0.4,
             pointRadius: 4,
-            pointBackgroundColor: '#6be07b'
+            pointBackgroundColor: '#5de0e6',
+            pointBorderColor: '#0b1221',
+            pointBorderWidth: 2
           }]
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
-          scales: {
-            x: {
-              type: 'linear',
-              title: { display: true, text: 'Tenor (Years)', color: '#a0a8b8' },
-              ticks: { color: '#a0a8b8' },
-              grid: { color: '#243047' }
-            },
-            y: {
-              title: { display: true, text: 'Rate (%)', color: '#a0a8b8' },
-              ticks: { color: '#a0a8b8' },
-              grid: { color: '#243047' }
-            }
-          },
           plugins: {
-            legend: { display: false },
+            legend: {
+              labels: {
+                color: '#e8edf6'
+              }
+            },
             tooltip: {
+              backgroundColor: '#111829',
+              titleColor: '#5de0e6',
+              bodyColor: '#e8edf6',
+              borderColor: '#243047',
+              borderWidth: 1,
               callbacks: {
                 label: function(context) {
                   return `Rate: ${context.parsed.y.toFixed(3)}%`;
                 }
+              }
+            }
+          },
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Tenor (years)',
+                color: '#a0a8b8'
+              },
+              ticks: {
+                color: '#a0a8b8'
+              },
+              grid: {
+                color: '#243047'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Rate (%)',
+                color: '#a0a8b8'
+              },
+              ticks: {
+                color: '#a0a8b8',
+                callback: function(value) {
+                  return value.toFixed(2) + '%';
+                }
+              },
+              grid: {
+                color: '#243047'
               }
             }
           }
@@ -312,15 +353,57 @@
     }
 
     function updateChart(curveData) {
-      if (!yieldCurveChart) initializeChart();
-      if (!curveData || curveData.length === 0) return;
+      if (!yieldCurveChart) {
+        initializeChart();
+      }
+      
+      if (!curveData || curveData.length === 0) {
+        yieldCurveChart.data.labels = [];
+        yieldCurveChart.data.datasets[0].data = [];
+        yieldCurveChart.update();
+        return;
+      }
 
+      // Sort by tenor
       const sorted = [...curveData].sort((a, b) => a.tenor - b.tenor);
+      
+      // Create smooth curve with interpolated points
       const tenors = sorted.map(p => p.tenor);
-      const rates = sorted.map(p => p.rate * 100);
+      const rates = sorted.map(p => p.rate * 100); // Convert to percentage
+      
+      // Add interpolated points for smoother curve
+      const smoothTenors = [];
+      const smoothRates = [];
+      const minTenor = Math.min(...tenors);
+      const maxTenor = Math.max(...tenors);
+      const steps = Math.max(50, (maxTenor - minTenor) * 10);
+      
+      for (let i = 0; i <= steps; i++) {
+        const t = minTenor + (maxTenor - minTenor) * (i / steps);
+        // Linear interpolation for smooth curve
+        let rate = 0;
+        if (t <= tenors[0]) {
+          rate = rates[0];
+        } else if (t >= tenors[tenors.length - 1]) {
+          rate = rates[rates.length - 1];
+        } else {
+          for (let j = 0; j < tenors.length - 1; j++) {
+            if (t >= tenors[j] && t <= tenors[j + 1]) {
+              const ratio = (t - tenors[j]) / (tenors[j + 1] - tenors[j]);
+              rate = rates[j] + (rates[j + 1] - rates[j]) * ratio;
+              break;
+            }
+          }
+        }
+        smoothTenors.push(t);
+        smoothRates.push(rate);
+      }
 
-      yieldCurveChart.data.labels = tenors.map(t => t.toFixed(2));
-      yieldCurveChart.data.datasets[0].data = rates.map((r, i) => ({ x: tenors[i], y: r }));
+      yieldCurveChart.data.labels = smoothTenors.map(t => t.toFixed(2));
+      yieldCurveChart.data.datasets[0].data = smoothRates.map((r, i) => ({
+        x: smoothTenors[i],
+        y: r
+      }));
       yieldCurveChart.update();
     }
 
@@ -334,9 +417,15 @@
       const minRate = Math.min(...rates);
       const maxRate = Math.max(...rates);
       
+      // Determine curve shape
       let shape = 'Normal';
-      if (rates[0] > rates[rates.length - 1]) shape = 'Inverted';
-      else if (Math.abs(rates[0] - rates[rates.length - 1]) < 0.2) shape = 'Flat';
+      if (rates[0] > rates[rates.length - 1]) {
+        shape = 'Inverted';
+      } else if (rates[0] < rates[rates.length - 1]) {
+        shape = 'Normal';
+      } else {
+        shape = 'Flat';
+      }
       
       document.getElementById('maxTenor').textContent = maxTenor.toFixed(2) + 'Y';
       document.getElementById('minRate').textContent = minRate.toFixed(2) + '%';
@@ -350,9 +439,12 @@
       document.getElementById('bootstrapInputs').style.display = mode === 'bootstrap' ? 'block' : 'none';
       document.getElementById('indexInputs').style.display = mode === 'index' ? 'block' : 'none';
       
-      if (mode === 'index') loadAvailableIndexes();
+      if (mode === 'index') {
+        loadAvailableIndexes();
+      }
     }
-
+    
+    // Initialize on page load
     document.getElementById('mode').addEventListener('change', toggleInputMode);
 
     function addTenorRow() {
@@ -375,7 +467,7 @@
 
     function updateRemoveButtons() {
       const rows = document.querySelectorAll('.tenor-row');
-      rows.forEach((row) => {
+      rows.forEach((row, idx) => {
         const btn = row.querySelector('.remove-btn');
         btn.style.display = rows.length > 1 ? 'block' : 'none';
       });
@@ -390,6 +482,21 @@
         </div>
       `;
       document.getElementById('formError').style.display = 'none';
+      document.getElementById('curveTable').innerHTML = `
+        <thead>
+          <tr>
+            <th>Tenor (years)</th>
+            <th>Rate (%)</th>
+            <th>Discount Factor</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="3" style="text-align:center; color: var(--muted);">Run a calculation to see curve data</td></tr>
+        </tbody>
+      `;
+      ['spot3y', 'df3y', 'forward2y5y', 'zcPrice3y'].forEach(id => {
+        document.getElementById(id).textContent = '–';
+      });
     }
 
     // Index-based curve functions
@@ -405,6 +512,7 @@
         const data = await response.json();
         availableIndexes = data.indexes;
         
+        // Populate primary index dropdown
         const primarySelect = document.getElementById('primaryIndex');
         primarySelect.innerHTML = '<option value="">Select Primary Index</option>';
         Object.keys(availableIndexes).forEach(code => {
@@ -421,6 +529,7 @@
     
     function loadIndexesForCurrency() {
       loadAvailableIndexes();
+      // Clear existing index rates when currency changes
       document.getElementById('indexRatesList').innerHTML = '';
     }
     
@@ -433,13 +542,19 @@
       row.innerHTML = `
         <select class="index-select" style="width: 35%; margin-right: 8px;">
           <option value="">Select Index</option>
-          ${Object.keys(availableIndexes).map(code => `<option value="${code}">${code}</option>`).join('')}
+          ${Object.keys(availableIndexes).map(code => 
+            `<option value="${code}">${code}</option>`
+          ).join('')}
         </select>
         <input type="number" class="index-tenor" placeholder="Tenor (years)" step="0.01" min="0.01" style="width: 25%; margin-right: 8px;">
         <input type="number" class="index-rate" placeholder="Rate (%)" step="0.01" min="0" style="width: 25%;">
-        <button class="remove-btn" onclick="this.parentElement.remove()">×</button>
+        <button class="remove-btn" onclick="removeIndexRate(this)">×</button>
       `;
       container.appendChild(row);
+    }
+    
+    function removeIndexRate(btn) {
+      btn.parentElement.remove();
     }
     
     function collectIndexRates() {
@@ -447,18 +562,34 @@
       const rows = document.querySelectorAll('#indexRatesList .tenor-row');
       
       rows.forEach(row => {
-        const indexCode = row.querySelector('.index-select').value;
-        const tenor = parseFloat(row.querySelector('.index-tenor').value);
-        const rate = parseFloat(row.querySelector('.index-rate').value);
+        const indexSelect = row.querySelector('.index-select');
+        const tenorInput = row.querySelector('.index-tenor');
+        const rateInput = row.querySelector('.index-rate');
+        
+        const indexCode = indexSelect.value;
+        const tenor = parseFloat(tenorInput.value);
+        const rate = parseFloat(rateInput.value);
         
         if (indexCode && !isNaN(tenor) && !isNaN(rate) && tenor > 0) {
-          if (!indexRates[indexCode]) indexRates[indexCode] = [];
-          indexRates[indexCode].push({ tenor: tenor, rate: rate / 100 });
+          if (!indexRates[indexCode]) {
+            indexRates[indexCode] = [];
+          }
+          indexRates[indexCode].push({
+            tenor: tenor,
+            rate: rate / 100 // Convert % to decimal
+          });
         }
       });
       
       return indexRates;
     }
+    
+    // Load indexes on page load if in index mode
+    window.addEventListener('DOMContentLoaded', function() {
+      if (document.getElementById('mode').value === 'index') {
+        loadAvailableIndexes();
+      }
+    });
 
     async function calculateCurve() {
       const errorDiv = document.getElementById('formError');
@@ -466,72 +597,147 @@
       
       try {
         const mode = document.getElementById('mode').value;
-        let requestBody, endpoint = '/api/yield-curve/calculate';
+        let requestBody;
 
         if (mode === 'manual') {
-          const tenors = [], rates = [];
+          const tenors = [];
+          const rates = [];
           document.querySelectorAll('.tenor-row').forEach(row => {
             const tenor = parseFloat(row.querySelector('.tenor').value);
             const rate = parseFloat(row.querySelector('.rate').value);
             if (!isNaN(tenor) && !isNaN(rate) && tenor > 0) {
               tenors.push(tenor);
-              rates.push(rate / 100);
+              rates.push(rate / 100); // Convert % to decimal
             }
           });
-          if (tenors.length === 0) throw new Error('Please enter at least one tenor and rate');
-          requestBody = { tenors, rates, interpolation: document.getElementById('interpolation').value, compounding: document.getElementById('compounding').value };
+
+          if (tenors.length === 0) {
+            throw new Error('Please enter at least one tenor and rate');
+          }
+
+          requestBody = {
+            tenors: tenors,
+            rates: rates,
+            interpolation: document.getElementById('interpolation').value,
+            compounding: document.getElementById('compounding').value
+          };
         } else if (mode === 'index') {
+          // Index-based curve construction
           const indexRates = collectIndexRates();
-          if (Object.keys(indexRates).length === 0) throw new Error('Please enter at least one index rate');
-          endpoint = '/api/yield-curve/from-index';
-          requestBody = { index_rates: indexRates, primary_index: document.getElementById('primaryIndex').value || null, interpolation: document.getElementById('interpolation').value, compounding: document.getElementById('compounding').value };
+          if (Object.keys(indexRates).length === 0) {
+            throw new Error('Please enter at least one index rate');
+          }
+          
+          const primaryIndex = document.getElementById('primaryIndex').value;
+          requestBody = {
+            index_rates: indexRates,
+            primary_index: primaryIndex || null,
+            interpolation: document.getElementById('interpolation').value,
+            day_count: null,
+            compounding: document.getElementById('compounding').value
+          };
         } else {
           const bondData = document.getElementById('bondData').value;
-          if (!bondData.trim()) throw new Error('Please enter bond data');
-          requestBody = { bonds: JSON.parse(bondData), interpolation: document.getElementById('interpolation').value, compounding: document.getElementById('compounding').value };
+          if (!bondData.trim()) {
+            throw new Error('Please enter bond data');
+          }
+          const bonds = JSON.parse(bondData);
+          requestBody = {
+            bonds: bonds,
+            interpolation: document.getElementById('interpolation').value,
+            compounding: document.getElementById('compounding').value
+          };
         }
 
-        const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
-        if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Calculation failed'); }
+        const endpoint = mode === 'index' ? '/api/yield-curve/from-index' : '/api/yield-curve/calculate';
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Calculation failed');
+        }
 
         const result = await response.json();
         displayResults(result);
       } catch (error) {
-        errorDiv.textContent = error.message || 'An error occurred';
+        errorDiv.textContent = error.message || 'An error occurred during calculation';
         errorDiv.style.display = 'block';
-        console.error('Error:', error);
+        console.error('Yield curve calculation error:', error);
       }
     }
 
     function displayResults(result) {
+      // Update the yield curve chart
       if (result.curve_data && result.curve_data.length > 0) {
         updateChart(result.curve_data);
         calculateCurveMetrics(result.curve_data);
-        
-        const tbody = document.querySelector('#curveTable tbody');
-        tbody.innerHTML = result.curve_data.filter(p => !p.interpolated).map(p => `
-          <tr>
-            <td>${p.tenor.toFixed(2)}</td>
-            <td>${(p.rate * 100).toFixed(3)}%</td>
-            <td>${p.discount_factor.toFixed(6)}</td>
-          </tr>
-        `).join('');
+      }
+      
+      // Show info if curve is shorter than requested metrics
+      if (result.max_tenor && result.max_tenor < 3.0) {
+        const info = document.getElementById('formError');
+        if (info) {
+          info.textContent = `Note: Curve extends to ${result.max_tenor.toFixed(2)} years. Metrics use extrapolation.`;
+          info.style.display = 'block';
+          info.style.color = 'var(--warn)';
+        }
+      } else {
+        document.getElementById('formError').style.display = 'none';
+      }
+
+      if (result.curve_data && result.curve_data.length > 0) {
+        const tbody = document.createElement('tbody');
+        result.curve_data.forEach(point => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td>${point.tenor.toFixed(2)}</td>
+            <td>${(point.rate * 100).toFixed(3)}%</td>
+            <td>${point.discount_factor.toFixed(6)}</td>
+          `;
+          tbody.appendChild(row);
+        });
+        const table = document.getElementById('curveTable');
+        table.innerHTML = `
+          <thead>
+            <tr>
+              <th>Tenor (years)</th>
+              <th>Rate (%)</th>
+              <th>Discount Factor</th>
+            </tr>
+          </thead>
+        `;
+        table.appendChild(tbody);
       }
     }
+
+    updateRemoveButtons();
 
     async function fetchRealData() {
       const btn = document.getElementById('fetchRealBtn');
       const errorDiv = document.getElementById('formError');
+      errorDiv.style.display = 'none';
+      
+      // Show loading state
+      const originalText = btn.textContent;
       btn.disabled = true;
       btn.textContent = '⏳ Fetching...';
-      errorDiv.style.display = 'none';
       
       try {
         const response = await fetch('/api/yield-curve/fetch-real');
-        if (!response.ok) { const error = await response.json(); throw new Error(error.detail || 'Failed to fetch'); }
-
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Failed to fetch real data');
+        }
+        
         const result = await response.json();
-        if (result.data && result.data.tenors) {
+        
+        if (result.success && result.data) {
+          // Populate the tenor inputs with real data
           const container = document.getElementById('tenorInputs');
           container.innerHTML = '';
           
@@ -545,16 +751,18 @@
             `;
             container.appendChild(row);
           });
+          
           updateRemoveButtons();
           
-          document.getElementById('mode').value = 'manual';
-          toggleInputMode();
-          
-          errorDiv.textContent = `✓ Fetched real Treasury yields from FRED`;
+          // Show success message
+          errorDiv.textContent = `✓ Fetched real Treasury yields from FRED (${result.data.source})`;
           errorDiv.style.display = 'block';
           errorDiv.style.color = 'var(--accent-2)';
           
-          calculateCurve();
+          // Auto-calculate the curve
+          setTimeout(() => {
+            calculateCurve();
+          }, 500);
         }
       } catch (error) {
         errorDiv.textContent = error.message;
@@ -562,13 +770,14 @@
         errorDiv.style.color = '#ff7b7b';
       } finally {
         btn.disabled = false;
-        btn.textContent = '📊 Fetch Real Treasury Yields (FRED)';
+        btn.textContent = originalText;
       }
     }
-
-    // Initialize
-    initializeChart();
-    updateRemoveButtons();
+    
+    // Initialize chart on page load
+    window.addEventListener('DOMContentLoaded', function() {
+      initializeChart();
+    });
   </script>
 </body>
 </html>

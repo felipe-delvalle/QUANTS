@@ -1,20 +1,32 @@
+from __future__ import annotations
+
 import numpy as np
 from scipy.interpolate import CubicSpline
+
 from .base import Interpolator
 
 
 class CubicSplineInterpolator(Interpolator):
-    """Cubic spline interpolation for smooth curves."""
+    def __init__(self):
+        self._spline = None
+        self._cache_key = None
 
-    def interpolate(self, x: np.ndarray, y: np.ndarray, target: float) -> float:
-        if len(x) < 2:
-            return float(y[0]) if len(y) > 0 else 0.0
-        cs = CubicSpline(x, y, bc_type='natural')
-        return float(cs(target))
+    def _ensure_spline(self, tenors: np.ndarray, rates: np.ndarray):
+        cache_key = (tuple(tenors.tolist()), tuple(rates.tolist()))
+        if self._spline is None or self._cache_key != cache_key:
+            self._spline = CubicSpline(tenors, rates, bc_type="natural")
+            self._cache_key = cache_key
 
-    def extrapolate(self, x: np.ndarray, y: np.ndarray, target: float) -> float:
-        if len(x) < 2:
-            return float(y[0]) if len(y) > 0 else 0.0
-        cs = CubicSpline(x, y, bc_type='natural')
-        return float(cs(target))
+    def interpolate(self, tenors: np.ndarray, rates: np.ndarray, target_tenor: float) -> float:
+        self._ensure_spline(tenors, rates)
+        return float(self._spline(target_tenor))
+
+    def extrapolate(self, tenors: np.ndarray, rates: np.ndarray, target_tenor: float) -> float:
+        self._ensure_spline(tenors, rates)
+        if target_tenor < tenors[0]:
+            slope = self._spline(tenors[1], 1)
+            return float(rates[0] + slope * (target_tenor - tenors[0]))
+        slope = self._spline(tenors[-1], 1)
+        return float(rates[-1] + slope * (target_tenor - tenors[-1]))
+
 

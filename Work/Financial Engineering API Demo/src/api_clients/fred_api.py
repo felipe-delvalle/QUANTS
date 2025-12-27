@@ -1,5 +1,6 @@
 """
-FRED API Client for fetching US Treasury yields
+FRED API Client
+Fetches US Treasury yield data from Federal Reserve Economic Data (FRED)
 """
 
 import requests
@@ -11,7 +12,8 @@ from cachetools import TTLCache
 
 logger = logging.getLogger(__name__)
 
-# Treasury series IDs and their tenors
+# FRED Treasury Constant Maturity Rate series IDs
+# Mapping: series_id -> (tenor_years, display_name)
 TREASURY_SERIES = {
     "DGS1MO": (1/12, "1 Month"),
     "DGS3MO": (0.25, "3 Month"),
@@ -26,22 +28,36 @@ TREASURY_SERIES = {
     "DGS30": (30.0, "30 Year"),
 }
 
-# Cache for 1 hour
-_yield_cache: TTLCache = TTLCache(maxsize=10, ttl=3600)
+# Cache for 1 hour (Treasury data updates daily)
+_yield_cache = TTLCache(maxsize=10, ttl=3600)
 
 
 class FREDClient:
-    """Client for fetching data from FRED (Federal Reserve Economic Data)"""
-    
+    """Client for FRED API to fetch Treasury yield data"""
+
     BASE_URL = "https://api.stlouisfed.org/fred/series/observations"
 
     def __init__(self, api_key: Optional[str] = None):
+        """
+        Initialize FRED client
+
+        Args:
+            api_key: FRED API key (get free key from https://fred.stlouisfed.org/docs/api/api_key.html)
+        """
         self.api_key = api_key
         if not api_key:
             logger.warning("FRED API key not provided. Real market data will not be available.")
 
     def _fetch_series_latest(self, series_id: str) -> Optional[float]:
-        """Fetch the latest value for a FRED series."""
+        """
+        Fetch the latest observation for a FRED series
+
+        Args:
+            series_id: FRED series ID (e.g., 'DGS10')
+
+        Returns:
+            Latest rate value or None if unavailable
+        """
         if not self.api_key:
             return None
 
@@ -50,49 +66,84 @@ class FREDClient:
             return _yield_cache[cache_key]
 
         try:
+            # FRED API v2 format - according to official docs at https://fred.stlouisfed.org/docs/api/fred/
             params = {
                 "series_id": series_id,
                 "api_key": self.api_key,
                 "file_type": "json",
-                "limit": 1,
-                "sort_order": "desc",
+                "limit": 1,  # Only get latest observation (fast!)
+                "sort_order": "desc",  # Most recent first
             }
-            response = requests.get(self.BASE_URL, params=params, timeout=5)
-            response.raise_for_status()
+
+            response = requests.get(self.BASE_URL, params=params, timeout=10)
+            
+            # Check for API errors first
+            if response.status_code != 200:
+                error_data = response.text
+                logger.error(f"FRED API error for {series_id}: {response.status_code} - {error_data}")
+                # Try to parse JSON error if available
+                try:
+                    error_json = response.json()
+                    if "error_message" in error_json:
+                        logger.error(f"FRED API error message: {error_json['error_message']}")
+                except:
+                    pass
+                return None
+            
             data = response.json()
 
+            # FRED API response structure: {"observations": [...]}
             if "observations" in data and len(data["observations"]) > 0:
                 obs = data["observations"][0]
                 value_str = obs.get("value", ".")
-                if value_str != ".":
-                    rate = float(value_str)  # Rate is already in percentage form
-                    _yield_cache[cache_key] = rate
-                    return rate
+                if value_str != "." and value_str is not None:  # FRED uses "." for missing data
+                    try:
+                        rate = float(value_str) / 100.0  # Convert percentage to decimal
+                        _yield_cache[cache_key] = rate
+                        return rate
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid value format for {series_id}: {value_str}")
+                        return None
 
             logger.warning(f"No valid data for series {series_id}")
             return None
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching FRED series {series_id}: {e}")
+            return None
         except Exception as e:
-            logger.error(f"Error fetching FRED series {series_id}: {e}")
+            logger.error(f"Error fetching FRED series {series_id}: {e}", exc_info=True)
             return None
 
     def fetch_treasury_yields(self) -> Tuple[List[float], List[float]]:
-        """Fetch all Treasury yields in parallel."""
+        """
+        Fetch current US Treasury yields for all available maturities
+
+        Returns:
+            Tuple of (tenors, rates) where:
+            - tenors: List of tenor values in years
+            - rates: List of corresponding rates (as decimals, e.g., 0.05 for 5%)
+        """
         if not self.api_key:
             raise ValueError("FRED API key required. Get a free key from https://fred.stlouisfed.org/docs/api/api_key.html")
 
+        # Check cache first
         cache_key = "treasury_yields_full"
         if cache_key in _yield_cache:
             return _yield_cache[cache_key]
 
-        tenors: List[float] = []
-        rates: List[float] = []
+        # Fetch all series in parallel for speed
+        tenors = []
+        rates = []
         series_list = list(TREASURY_SERIES.keys())
 
+        # Use ThreadPoolExecutor for parallel requests (much faster!)
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_series = {
                 executor.submit(self._fetch_series_latest, series_id): series_id
                 for series_id in series_list
             }
+
             results = {}
             for future in as_completed(future_to_series):
                 series_id = future_to_series[future]
@@ -103,7 +154,7 @@ class FREDClient:
                 except Exception as e:
                     logger.error(f"Error fetching {series_id}: {e}")
 
-        # Sort by tenor
+        # Build sorted list of tenors and rates
         for series_id in sorted(series_list, key=lambda x: TREASURY_SERIES[x][0]):
             if series_id in results:
                 tenor, _ = TREASURY_SERIES[series_id]
@@ -113,16 +164,22 @@ class FREDClient:
         if not tenors:
             raise ValueError("No Treasury yield data available from FRED")
 
+        # Cache the result
         result = (tenors, rates)
         _yield_cache[cache_key] = result
         return result
 
     def get_yield_curve_data(self) -> Dict:
-        """Get yield curve data in a format ready for the API."""
+        """
+        Get yield curve data formatted for the UI
+
+        Returns:
+            Dictionary with tenors, rates, and metadata
+        """
         tenors, rates = self.fetch_treasury_yields()
         return {
             "tenors": tenors,
-            "rates": rates,  # Already in percentage form
+            "rates": [r * 100 for r in rates],  # Convert to percentage for display
             "source": "FRED (Federal Reserve Economic Data)",
             "as_of": datetime.now().isoformat(),
             "is_real_data": True,

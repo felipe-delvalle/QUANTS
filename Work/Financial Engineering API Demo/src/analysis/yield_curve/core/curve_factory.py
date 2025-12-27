@@ -10,7 +10,9 @@ from .curve import YieldCurve
 
 
 class CurveFactory:
-    """Factory helpers for constructing yield curves with registered strategies."""
+    """
+    Factory helpers for constructing yield curves with registered strategies.
+    """
 
     @staticmethod
     def create_spot_curve(
@@ -68,4 +70,5 @@ class CurveFactory:
             day_count=day_count,
             compounding=compounding,
         )
+
 

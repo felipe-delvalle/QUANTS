@@ -33,6 +33,7 @@ class Settings:
     github_token: Optional[str] = None
     alpha_vantage_api_key: Optional[str] = None
     yahoo_finance_enabled: bool = True
+    fred_api_key: Optional[str] = None
     
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,7 +42,8 @@ class Settings:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             github_token=os.getenv("GITHUB_TOKEN"),
             alpha_vantage_api_key=os.getenv("ALPHA_VANTAGE_API_KEY"),
-            yahoo_finance_enabled=os.getenv("YAHOO_FINANCE_ENABLED", "true").lower() == "true"
+            yahoo_finance_enabled=os.getenv("YAHOO_FINANCE_ENABLED", "true").lower() == "true",
+            fred_api_key=os.getenv("FRED_API_KEY"),
         )
 
 

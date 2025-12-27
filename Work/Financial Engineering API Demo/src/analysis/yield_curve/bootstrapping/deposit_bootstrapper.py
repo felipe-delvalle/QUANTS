@@ -1,10 +1,16 @@
+from __future__ import annotations
+
 from typing import Dict, List, Tuple
 import numpy as np
+
 from .base import Bootstrapper
 
 
 class DepositBootstrapper(Bootstrapper):
-    """Bootstrap a spot curve from deposit rates (money market instruments)."""
+    """
+    Bootstrap a spot curve from deposit rates (money market instruments).
+    Expects market_data as list of {"maturity": years, "rate": decimal}.
+    """
 
     def bootstrap(self, market_data: List[Dict]) -> Tuple[np.ndarray, np.ndarray]:
         if not market_data:
@@ -18,4 +24,5 @@ class DepositBootstrapper(Bootstrapper):
             raise ValueError("Deposit maturities must be positive")
 
         return tenors, rates
+
 
