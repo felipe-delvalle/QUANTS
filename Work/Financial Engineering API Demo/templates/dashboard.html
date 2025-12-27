@@ -88,22 +88,15 @@
   </style>
 </head>
 <body>
-<<<<<<< Updated upstream
   <div class="hero-bar">
     <div class="hero-text">
       <h1>{{ title }}</h1>
       <p>Live opportunities across assets. Data is fetched on request.{% if demo_mode %}<span class="demo-indicator">[DEMO MODE]</span>{% endif %}</p>
     </div>
+    <div class="nav-links">
+      <a class="nav-link" href="/home">← Back to Home</a>
+    </div>
     <a href="/bond-pricer" class="cta-button">🔗 Open Bond Pricer</a>
-=======
-  <h1>{{ title }}</h1>
-  <div class="nav-links">
-    <a class="nav-link" href="/home">← Back to Home</a>
-  </div>
-  <p>Live opportunities across assets. Data is fetched on request.{% if demo_mode %}<span class="demo-indicator">[DEMO MODE]</span>{% endif %}</p>
-  <div style="margin: 12px 0;">
-    <a href="/bond-pricer" style="display:inline-block; padding:8px 14px; background:#5de0e6; color:#0b1221; border-radius:8px; font-weight:700; text-decoration:none;">🔗 Open Bond Pricer</a>
->>>>>>> Stashed changes
   </div>
   
   <div class="resources-section">
@@ -116,39 +109,20 @@
       </div>
       <div class="api-card">
         <span class="method get">GET</span>
-        <a href="/dashboard">/dashboard</a>
-        <div class="api-desc">Trading opportunities dashboard (current page)</div>
-      </div>
-      <div class="api-card">
-        <span class="method get">GET</span>
-        <a href="/gallery">/gallery</a>
-        <div class="api-desc">Chart gallery - View generated visualizations</div>
+        <a href="/yield-curve">/yield-curve</a>
+        <div class="api-desc">Interest rate curve calculator</div>
       </div>
       <div class="api-card">
         <span class="method get">GET</span>
         <a href="/bond-pricer">/bond-pricer</a>
         <div class="api-desc">Bond pricer for US/EU</div>
       </div>
-<<<<<<< Updated upstream
       <div class="api-card">
         <span class="method get">GET</span>
-        <a href="/health">/health</a>
-        <div class="api-desc">Health check endpoint</div>
+        <a href="/reports">/reports</a>
+        <div class="api-desc">PDF reports & analysis</div>
       </div>
       <div class="api-card">
-        <span class="method get">GET</span>
-        <a href="/">/</a>
-        <div class="api-desc">API root - List all available endpoints</div>
-      </div>
-      <div class="api-card">
-=======
-      <div class="resource-item">
-        <span class="method get">GET</span>
-        <div class="endpoint"><a href="/bond-pricer" target="_blank">/bond-pricer</a></div>
-        <div class="description">Bond pricer - US & EU presets, price/YTM</div>
-      </div>
-      <div class="resource-item">
->>>>>>> Stashed changes
         <span class="method post">POST</span>
         <span>/scan</span>
         <div class="api-desc">Scan for trading opportunities (requires API key)</div>

@@ -191,13 +191,14 @@ async def _preload_loop():
         await asyncio.sleep(PRELOAD_INTERVAL_SECONDS)
 
 
-@app.on_event("startup")
-async def _start_preload_task():
-    """Kick off the periodic preload loop."""
-    global preload_task
-    if preload_task is None:
-        preload_task = asyncio.create_task(_preload_loop())
-        logger.info("Preload task started (every %ss, retention %ss)", PRELOAD_INTERVAL_SECONDS, PRELOAD_RETENTION_SECONDS)
+# Background preload disabled for lean operation - dashboard fetches on-demand only
+# @app.on_event("startup")
+# async def _start_preload_task():
+#     """Kick off the periodic preload loop."""
+#     global preload_task
+#     if preload_task is None:
+#         preload_task = asyncio.create_task(_preload_loop())
+#         logger.info("Preload task started (every %ss, retention %ss)", PRELOAD_INTERVAL_SECONDS, PRELOAD_RETENTION_SECONDS)
 
 
 @app.on_event("shutdown")
@@ -351,11 +352,10 @@ def home(request: Request):
             "title": "FDV-QUANTS",
             "endpoints": [
                 {"method": "GET", "path": "/home", "desc": "Home - navigation"},
-                {"method": "GET", "path": "/dashboard", "desc": "Trading opportunities dashboard"},
-                {"method": "GET", "path": "/gallery", "desc": "Chart gallery"},
+                {"method": "GET", "path": "/yield-curve", "desc": "Interest rate curve calculator"},
                 {"method": "GET", "path": "/bond-pricer", "desc": "Bond pricer for US/EU"},
+                {"method": "GET", "path": "/reports", "desc": "PDF reports & analysis"},
                 {"method": "GET", "path": "/health", "desc": "Health check"},
-                {"method": "GET", "path": "/", "desc": "API root"},
                 {"method": "POST", "path": "/scan", "desc": "Scan for trading opportunities (requires API key)"},
                 {"method": "POST", "path": "/backtest", "desc": "Backtest strategies (requires API key)"},
             ],
@@ -993,14 +993,8 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         asset_types: Comma-separated list of additional asset types (e.g., "crypto,forex,commodities")
     """
     try:
-        # Try to hydrate preload snapshot from Redis if memory state is empty (e.g., after restart)
+        # Background preload disabled - dashboard fetches on-demand only
         global last_preload_opportunities, last_preload_stats, last_preload_timestamp
-        if not last_preload_opportunities:
-            snapshot = _load_preload_snapshot()
-            if snapshot:
-                last_preload_opportunities = snapshot.get("opps", [])
-                last_preload_stats = snapshot.get("stats", {})
-                last_preload_timestamp = snapshot.get("timestamp")
 
         # Check cache first
         cache_key = _get_dashboard_cache_key(threshold, sectors, asset_types, demo)
@@ -1507,23 +1501,23 @@ def generate_pdf_report(symbol: str, signal_type: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gallery", response_class=HTMLResponse)
-def gallery(request: Request):
+@app.get("/reports", response_class=HTMLResponse)
+def reports(request: Request):
     """
-    Image gallery for generated charts (served from output/).
+    Reports page for generated PDF analysis reports (served from output/).
     """
     output_dir = "output"
     files = []
     if os.path.isdir(output_dir):
         files = sorted(
-            [f for f in os.listdir(output_dir) if f.lower().endswith(".png")]
+            [f for f in os.listdir(output_dir) if f.lower().endswith(".pdf")]
         )
     return templates.TemplateResponse(
-        "gallery.html",
+        "reports.html",
         {
             "request": request,
             "files": files,
-            "title": "Chart Gallery",
+            "title": "Financial Reports",
         },
     )
 
