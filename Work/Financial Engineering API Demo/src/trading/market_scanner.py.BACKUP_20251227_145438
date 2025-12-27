@@ -85,14 +85,22 @@ class MarketScanner:
                     self.last_price_cache[symbol] = current_price
                 except Exception as price_error:
                     logger.warning(f"Failed to fetch real-time price for {symbol}: {price_error}")
+<<<<<<< Updated upstream
+
+=======
             
+>>>>>>> Stashed changes
             # Use cached last price if live quote failed
             if current_price is None:
                 cached_price = self.last_price_cache.get(symbol)
                 if cached_price is not None:
                     current_price = cached_price
                     fallback_reason = "Using cached price (quote fallback)"
+<<<<<<< Updated upstream
+
+=======
             
+>>>>>>> Stashed changes
             # Try historical data as a secondary fallback
             if current_price is None:
                 try:

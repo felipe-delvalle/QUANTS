@@ -12,7 +12,11 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import json
+<<<<<<< Updated upstream
+from typing import List, Optional, Dict, Set, Any
+=======
 from typing import List, Optional, Dict, Any, Set
+>>>>>>> Stashed changes
 import os
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Query
@@ -39,6 +43,14 @@ try:
 except ImportError:  # pragma: no cover
     psutil = None
 
+<<<<<<< Updated upstream
+try:
+    import redis  # Optional; used for persisted preload snapshot
+except ImportError:  # pragma: no cover
+    redis = None
+
+=======
+>>>>>>> Stashed changes
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
 
@@ -60,7 +72,11 @@ dashboard_cache = TTLCache(maxsize=64, ttl=300)
 
 # Preload/retention settings
 PRELOAD_INTERVAL_SECONDS = 300  # every 5 minutes
+<<<<<<< Updated upstream
+PRELOAD_RETENTION_SECONDS = 720  # target ~12 minutes retention
+=======
 PRELOAD_RETENTION_SECONDS = 720  # keep for ~12 minutes, then evict
+>>>>>>> Stashed changes
 
 # Shared data loader and scanners to reuse caches across requests
 shared_loader = DataLoader(cache_ttl_seconds=PRELOAD_RETENTION_SECONDS)
@@ -72,6 +88,51 @@ preload_task: Optional[asyncio.Task] = None
 last_preload_timestamp: Optional[datetime] = None
 last_preload_stats: Dict[str, Any] = {}
 last_preload_opportunities: List[Dict[str, Any]] = []
+<<<<<<< Updated upstream
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+
+
+def _get_redis_client():
+    if not redis:
+        return None
+    try:
+        return redis.Redis.from_url(REDIS_URL, decode_responses=True)
+    except Exception:
+        return None
+
+
+def _persist_preload_snapshot(opps: List[Dict[str, Any]], stats: Dict[str, Any], timestamp: datetime):
+    client = _get_redis_client()
+    if not client:
+        return
+    try:
+        payload = json.dumps(
+            {
+                "timestamp": timestamp.isoformat(),
+                "stats": stats,
+                "opps": opps,
+            }
+        )
+        client.setex("preload:snapshot", PRELOAD_RETENTION_SECONDS * 2, payload)
+    except Exception:
+        pass
+
+
+def _load_preload_snapshot() -> Optional[Dict[str, Any]]:
+    client = _get_redis_client()
+    if not client:
+        return None
+    try:
+        raw = client.get("preload:snapshot")
+        if not raw:
+            return None
+        data = json.loads(raw)
+        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+        return data
+    except Exception:
+        return None
+=======
+>>>>>>> Stashed changes
 
 
 def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_types: Optional[str], demo: bool) -> str:
@@ -169,14 +230,22 @@ def _preload_once() -> Dict[str, Any]:
             stats["per_asset"][asset_type_value] = len(opps)
             stats["symbols"] += len(symbols)
             last_preload_opportunities.extend(opps)
+<<<<<<< Updated upstream
+        except Exception as exc:  # pragma: no cover
+=======
         except Exception as exc:  # pragma: no cover - defensive
+>>>>>>> Stashed changes
             logger.error("Preload failed for %s: %s", asset_type_value, exc, exc_info=True)
             stats["errors"].append(f"{asset_type_value}: {exc}")
 
     stats["duration_sec"] = (datetime.utcnow() - start).total_seconds()
     last_preload_timestamp = datetime.utcnow()
     last_preload_stats = stats
+<<<<<<< Updated upstream
+    _persist_preload_snapshot(last_preload_opportunities, stats, last_preload_timestamp)
+=======
 
+>>>>>>> Stashed changes
     _prune_caches()
     return stats
 
@@ -197,7 +266,15 @@ async def _start_preload_task():
     global preload_task
     if preload_task is None:
         preload_task = asyncio.create_task(_preload_loop())
+<<<<<<< Updated upstream
+        logger.info(
+            "Preload task started (interval=%ss, retention=%ss)",
+            PRELOAD_INTERVAL_SECONDS,
+            PRELOAD_RETENTION_SECONDS,
+        )
+=======
         logger.info("Preload task started (every %ss, retention %ss)", PRELOAD_INTERVAL_SECONDS, PRELOAD_RETENTION_SECONDS)
+>>>>>>> Stashed changes
 
 
 @app.on_event("shutdown")
@@ -260,7 +337,11 @@ def health():
 
 @app.get("/api/monitor")
 def monitor():
+<<<<<<< Updated upstream
+    """Lightweight monitoring: preload status, cache sizes, Redis status, and process memory."""
+=======
     """Lightweight monitoring: cache sizes, preload status, resource snapshot."""
+>>>>>>> Stashed changes
     process_mem_mb = None
     if psutil:
         try:
@@ -268,6 +349,31 @@ def monitor():
             process_mem_mb = round(process.memory_info().rss / (1024 * 1024), 2)
         except Exception:
             process_mem_mb = None
+<<<<<<< Updated upstream
+    
+    # Check Redis status
+    redis_status = {"available": False, "connected": False, "snapshot_exists": False}
+    redis_client = _get_redis_client()
+    if redis_client:
+        redis_status["available"] = True
+        try:
+            redis_client.ping()
+            redis_status["connected"] = True
+            snapshot = redis_client.get("preload:snapshot")
+            redis_status["snapshot_exists"] = snapshot is not None
+            if snapshot:
+                try:
+                    import json
+                    data = json.loads(snapshot)
+                    redis_status["snapshot_age_sec"] = (
+                        datetime.utcnow() - datetime.fromisoformat(data.get("timestamp", ""))
+                    ).total_seconds() if data.get("timestamp") else None
+                except Exception:
+                    pass
+        except Exception as e:
+            redis_status["error"] = str(e)
+    
+=======
     else:
         try:
             import resource  # type: ignore
@@ -278,6 +384,7 @@ def monitor():
         except Exception:
             process_mem_mb = None
 
+>>>>>>> Stashed changes
     return {
         "preload": {
             "interval_sec": PRELOAD_INTERVAL_SECONDS,
@@ -291,9 +398,14 @@ def monitor():
             "historical_fetcher": {"size": len(shared_historical_fetcher.cache), "ttl": shared_historical_fetcher.cache.ttl},
             "data_loader": {"size": len(shared_loader.cache), "ttl": shared_loader.cache.ttl},
         },
+<<<<<<< Updated upstream
+        "redis": redis_status,
+        "resources": {"process_mem_mb": process_mem_mb},
+=======
         "resources": {
             "process_mem_mb": process_mem_mb,
         },
+>>>>>>> Stashed changes
     }
 
 
@@ -429,6 +541,8 @@ def _categorize_opportunities(opportunities: List[Dict]) -> Dict[str, List[Dict]
     }
 
 
+<<<<<<< Updated upstream
+=======
 BOND_MARKETS = ["US Treasuries", "EU Gov"]
 
 BOND_PRESETS = {
@@ -445,6 +559,7 @@ BOND_PRESETS = {
 }
 
 
+>>>>>>> Stashed changes
 def _build_bond_cashflows(face_value: float, coupon_rate_pct: float, years_to_maturity: float, frequency: int) -> List[Dict[str, float]]:
     periods = max(int(round(years_to_maturity * frequency)), 1)
     coupon_payment = face_value * (coupon_rate_pct / 100.0) / frequency
@@ -508,6 +623,25 @@ def _macaulay_duration(cashflows: List[Dict[str, float]], rate_pct: Optional[flo
     return numerator / price
 
 
+<<<<<<< Updated upstream
+BOND_MARKETS = ["US Treasuries", "EU Gov"]
+
+BOND_PRESETS = {
+    "US Treasuries": [
+        {"id": "ust-2y", "name": "US Treasury 2Y", "face_value": 1000, "coupon_rate_pct": 4.2, "years_to_maturity": 2.0, "frequency": 2, "market_rate_pct": 4.1, "price": None},
+        {"id": "ust-5y", "name": "US Treasury 5Y", "face_value": 1000, "coupon_rate_pct": 3.8, "years_to_maturity": 5.0, "frequency": 2, "market_rate_pct": 3.9, "price": None},
+        {"id": "ust-10y", "name": "US Treasury 10Y", "face_value": 1000, "coupon_rate_pct": 4.0, "years_to_maturity": 10.0, "frequency": 2, "market_rate_pct": 4.2, "price": None},
+    ],
+    "EU Gov": [
+        {"id": "bund-5y", "name": "Bund 5Y", "face_value": 1000, "coupon_rate_pct": 2.5, "years_to_maturity": 5.0, "frequency": 1, "market_rate_pct": 2.4, "price": None},
+        {"id": "bund-10y", "name": "Bund 10Y", "face_value": 1000, "coupon_rate_pct": 2.8, "years_to_maturity": 10.0, "frequency": 1, "market_rate_pct": 2.6, "price": None},
+        {"id": "oat-7y", "name": "France OAT 7Y", "face_value": 1000, "coupon_rate_pct": 2.9, "years_to_maturity": 7.0, "frequency": 1, "market_rate_pct": 2.7, "price": None},
+    ],
+}
+
+
+=======
+>>>>>>> Stashed changes
 @app.get("/bond-pricer", response_class=HTMLResponse)
 def bond_pricer_page(request: Request):
     return templates.TemplateResponse(
@@ -1063,10 +1197,19 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         if demo:
             logger.info("Demo mode active: Using sample data for all symbols")
         
+<<<<<<< Updated upstream
+        # Prefer preloaded snapshot when available and recent
+        all_opps: List[Dict[str, Any]] = []
+        used_preloaded = False
+        if last_preload_opportunities and last_preload_timestamp:
+            age_sec = (datetime.utcnow() - last_preload_timestamp).total_seconds()
+            if age_sec <= PRELOAD_RETENTION_SECONDS * 2:
+=======
         # Prefer preloaded opportunities when available and fresh
         if last_preload_opportunities and last_preload_timestamp:
             age_sec = (datetime.utcnow() - last_preload_timestamp).total_seconds()
             if age_sec <= PRELOAD_RETENTION_SECONDS * 2:  # allow a small grace window
+>>>>>>> Stashed changes
                 preloaded_filtered = _filter_opportunities(
                     last_preload_opportunities,
                     threshold,
@@ -1076,6 +1219,35 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
                 if preloaded_filtered:
                     all_opps = preloaded_filtered
                     used_preloaded = True
+<<<<<<< Updated upstream
+                    logger.info("Served dashboard from preloaded snapshot (age %.1fs, %s items)", age_sec, len(all_opps))
+                    for opp in all_opps:
+                        at = str(opp.get("asset_type", "")).lower()
+                        asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
+
+        # If preloaded data insufficient, run live scans
+        if not all_opps:
+            symbols_by_type: Dict[str, List[str]] = {}
+            for symbol in all_symbols:
+                asset_type = _get_asset_type(symbol)
+                if asset_type.value not in symbols_by_type:
+                    symbols_by_type[asset_type.value] = []
+                symbols_by_type[asset_type.value].append(symbol)
+            
+            for asset_type_value, symbols in symbols_by_type.items():
+                try:
+                    opps = shared_scanner.scan_stocks(
+                        symbols,
+                        min_confidence=threshold,
+                        asset_type=asset_type_value,
+                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
+                        full_analysis=False,
+                        historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
+                    )
+                    all_opps.extend(opps)
+                    asset_type_counts[asset_type_value] = len(opps)
+                    logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols (live scan)")
+=======
                     logger.info(
                         "Served dashboard from preloaded snapshot (age %.1fs, %s items)",
                         age_sec,
@@ -1122,18 +1294,29 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
                         all_opps.extend(opps)
                         asset_type_counts[asset_type_value] = len(opps)
                         logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
+>>>>>>> Stashed changes
                 except Exception as e:
                     logger.error(f"Error scanning {asset_type_value} symbols: {e}")
                     failed_sources.append(f"{asset_type_value}_scanner")
 
+<<<<<<< Updated upstream
+            # If still empty, fall back to last preload unfiltered
+            if not all_opps and last_preload_opportunities:
+                logger.warning("Using last preloaded opportunities as fallback (no live results).")
+=======
             # If still no opportunities, fallback to last preload (unfiltered) to keep page populated
             if not all_opps and last_preload_opportunities:
                 logger.warning("Using last preloaded opportunities as fallback (no fresh data after scan).")
+>>>>>>> Stashed changes
                 all_opps = list(last_preload_opportunities)
                 for opp in all_opps:
                     at = str(opp.get("asset_type", "")).lower()
                     asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
+<<<<<<< Updated upstream
+        
+=======
 
+>>>>>>> Stashed changes
         # Categorize opportunities
         categorized = _categorize_opportunities(all_opps)
         
@@ -1526,148 +1709,3 @@ def gallery(request: Request):
             "title": "Chart Gallery",
         },
     )
-
-
-# ==================== YIELD CURVE ENDPOINTS ====================
-
-from src.analysis.yield_curve import YieldCurve, CurveFactory
-from src.analysis.yield_curve.indexes import IndexRegistry, IndexCurveFactory
-
-
-class YieldCurveRequest(BaseModel):
-    tenors: Optional[List[float]] = None
-    rates: Optional[List[float]] = None
-    bonds: Optional[List[Dict[str, Any]]] = None
-    interpolation: str = "cubic_spline"
-    compounding: str = "simple"
-
-
-class IndexCurveRequest(BaseModel):
-    index_rates: Dict[str, List[Dict[str, float]]]
-    primary_index: Optional[str] = None
-    interpolation: str = "cubic_spline"
-    compounding: str = "continuous"
-
-
-@app.get("/yield-curve", response_class=HTMLResponse)
-def yield_curve_page(request: Request):
-    """Yield curve calculator UI."""
-    return templates.TemplateResponse(
-        "yield_curve.html",
-        {"request": request, "title": "Yield Curve Calculator"},
-    )
-
-
-@app.post("/api/yield-curve/calculate")
-def calculate_yield_curve(req: YieldCurveRequest):
-    """Calculate yield curve from tenors/rates or bootstrap from bonds."""
-    try:
-        if req.bonds is not None:
-            curve = CurveFactory.create_from_bonds(
-                bonds=req.bonds,
-                bootstrapper_type="bond",
-                interpolation=req.interpolation,
-                compounding=req.compounding,
-            )
-        elif req.tenors is not None and req.rates is not None:
-            curve = CurveFactory.create_spot_curve(
-                tenors=req.tenors,
-                rates=req.rates,
-                interpolation=req.interpolation,
-                compounding=req.compounding,
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Provide either (tenors, rates) or bonds")
-
-        curve_data = []
-        for tenor, rate in zip(curve.tenors, curve.rates):
-            try:
-                df = curve.discount_factor(tenor)
-                curve_data.append({
-                    "tenor": float(tenor),
-                    "rate": float(rate),
-                    "discount_factor": float(df),
-                })
-            except Exception:
-                pass
-
-        return {"curve_data": curve_data}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error calculating yield curve: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/yield-curve/indexes")
-def list_indexes(currency: Optional[str] = None):
-    """List available interest rate indexes."""
-    try:
-        all_indexes = IndexRegistry.list_all()
-        indexes = {}
-        for code, idx in all_indexes.items():
-            if currency and idx.currency.upper() != currency.upper():
-                continue
-            indexes[code] = {
-                "code": code,
-                "name": idx.name,
-                "currency": idx.currency,
-                "day_count": idx.day_count,
-                "compounding": idx.compounding,
-            }
-        return {"indexes": indexes}
-    except Exception as e:
-        logger.error(f"Error listing indexes: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/yield-curve/from-index")
-def create_index_curve(req: IndexCurveRequest):
-    """Create yield curve from interest rate indexes (Murex-style)."""
-    try:
-        curve = IndexCurveFactory.create_from_multiple_indexes(
-            index_rates=req.index_rates,
-            primary_index=req.primary_index,
-            interpolation=req.interpolation,
-            compounding=req.compounding,
-        )
-
-        curve_data = []
-        for tenor, rate in zip(curve.tenors, curve.rates):
-            try:
-                df = curve.discount_factor(tenor)
-                curve_data.append({
-                    "tenor": float(tenor),
-                    "rate": float(rate),
-                    "discount_factor": float(df),
-                })
-            except Exception:
-                pass
-
-        return {"curve_data": curve_data}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error creating index curve: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/yield-curve/fetch-real")
-def fetch_real_treasury_yields():
-    """Fetch real US Treasury yields from FRED API."""
-    try:
-        from src.api_clients.fred_api import FREDClient
-        
-        fred_api_key = os.environ.get("FRED_API_KEY")
-        if not fred_api_key:
-            raise HTTPException(status_code=400, detail="FRED_API_KEY not configured. Add it to your .env file.")
-        
-        client = FREDClient(api_key=fred_api_key)
-        data = client.get_yield_curve_data()
-        
-        return {"data": data, "success": True}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching FRED data: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
