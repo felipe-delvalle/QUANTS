@@ -3,6 +3,7 @@ FastAPI service exposing scan, signal, and backtest endpoints.
 """
 
 import sys
+import asyncio
 from pathlib import Path
 
 # Add project root to Python path
@@ -11,7 +12,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 import json
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any, Set
 import os
 from datetime import datetime
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Query
@@ -31,6 +32,12 @@ from src.analysis import DetailedAnalyzer, ReportGenerator
 from src.analysis.advanced_indicators import AdvancedIndicators
 from src.backtesting import BacktestEngine
 from src.api_clients.yahoo_finance import YahooFinanceClient
+import pandas as pd
+
+try:
+    import psutil  # Optional; used for monitoring
+except ImportError:  # pragma: no cover
+    psutil = None
 
 settings = get_settings()
 logger = configure_logging(settings.log_level, __name__)
@@ -49,7 +56,22 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 rate_limiter = TTLCache(maxsize=512, ttl=60)
 
 # Dashboard result caching (5 minute TTL)
-dashboard_cache = TTLCache(maxsize=128, ttl=300)
+dashboard_cache = TTLCache(maxsize=64, ttl=300)
+
+# Preload/retention settings
+PRELOAD_INTERVAL_SECONDS = 300  # every 5 minutes
+PRELOAD_RETENTION_SECONDS = 720  # keep for ~12 minutes, then evict
+
+# Shared data loader and scanners to reuse caches across requests
+shared_loader = DataLoader(cache_ttl_seconds=PRELOAD_RETENTION_SECONDS)
+shared_historical_fetcher = HistoricalFetcher()
+shared_scanner = MarketScanner(data_loader=shared_loader, historical_fetcher=shared_historical_fetcher)
+
+# Preload state
+preload_task: Optional[asyncio.Task] = None
+last_preload_timestamp: Optional[datetime] = None
+last_preload_stats: Dict[str, Any] = {}
+last_preload_opportunities: List[Dict[str, Any]] = []
 
 
 def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_types: Optional[str], demo: bool) -> str:
@@ -57,6 +79,139 @@ def _get_dashboard_cache_key(threshold: float, sectors: Optional[str], asset_typ
     sectors_str = sectors or "all"
     asset_types_str = asset_types or "none"
     return f"dashboard:{threshold:.2f}:{sectors_str}:{asset_types_str}:{demo}"
+
+
+def _collect_preload_symbols() -> Dict[str, List[str]]:
+    """Gather symbols to warm caches across all asset types."""
+    stock_symbols: List[str] = []
+    for sector, symbols in MARKET_SYMBOLS.items():
+        stock_symbols.extend(list(symbols))
+    # Deduplicate while preserving order
+    seen = set()
+    stock_symbols = [s for s in stock_symbols if not (s in seen or seen.add(s))]
+
+    return {
+        AssetType.STOCK.value: stock_symbols,
+        AssetType.CRYPTO.value: list(CRYPTO_SYMBOLS),
+        AssetType.FOREX.value: list(FOREX_PAIRS),
+        AssetType.METAL.value: list(COMMODITIES),
+    }
+
+
+def _filter_opportunities(
+    opportunities: List[Dict[str, Any]],
+    threshold: float,
+    selected_sectors: Optional[Set[str]],
+    selected_asset_types: Optional[Set[str]],
+) -> List[Dict[str, Any]]:
+    """Apply threshold/sector/asset filters to a list of opportunities."""
+    if not opportunities:
+        return []
+
+    sector_lookup: Dict[str, str] = {}
+    if selected_sectors:
+        for sector, symbols in MARKET_SYMBOLS.items():
+            for sym in symbols:
+                sector_lookup[sym] = sector.value if hasattr(sector, "value") else str(sector)
+
+    filtered = []
+    for opp in opportunities:
+        conf = opp.get("confidence", 0)
+        if conf < threshold:
+            continue
+
+        asset_type = str(opp.get("asset_type", "")).lower()
+        if selected_asset_types and asset_type and asset_type not in selected_asset_types:
+            continue
+
+        if selected_sectors:
+            sym = opp.get("symbol")
+            sym_sector = sector_lookup.get(sym)
+            if sym_sector and sym_sector not in selected_sectors:
+                continue
+
+        filtered.append(opp)
+
+    return filtered
+
+
+def _prune_caches() -> None:
+    """Expire any stale entries to keep memory bounded."""
+    for cache in (shared_loader.cache, shared_historical_fetcher.cache, dashboard_cache):
+        try:
+            cache.expire()
+        except Exception:
+            continue
+
+
+def _preload_once() -> Dict[str, Any]:
+    """Run one preload cycle to warm caches and store last opportunities."""
+    global last_preload_timestamp, last_preload_stats, last_preload_opportunities
+
+    start = datetime.utcnow()
+    stats: Dict[str, Any] = {"per_asset": {}, "symbols": 0, "errors": []}
+    last_preload_opportunities = []
+
+    symbol_groups = _collect_preload_symbols()
+
+    for asset_type_value, symbols in symbol_groups.items():
+        if not symbols:
+            continue
+        try:
+            historical_years = 0.5 if asset_type_value == AssetType.STOCK.value else 0.25
+            opps = shared_scanner.scan_stocks(
+                symbols=symbols,
+                min_confidence=0.0,  # preload everything, filter later
+                asset_type=asset_type_value,
+                full_analysis=False,
+                historical_years=historical_years,
+            )
+            stats["per_asset"][asset_type_value] = len(opps)
+            stats["symbols"] += len(symbols)
+            last_preload_opportunities.extend(opps)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Preload failed for %s: %s", asset_type_value, exc, exc_info=True)
+            stats["errors"].append(f"{asset_type_value}: {exc}")
+
+    stats["duration_sec"] = (datetime.utcnow() - start).total_seconds()
+    last_preload_timestamp = datetime.utcnow()
+    last_preload_stats = stats
+
+    _prune_caches()
+    return stats
+
+
+async def _preload_loop():
+    """Background loop to refresh caches every PRELOAD_INTERVAL_SECONDS."""
+    while True:
+        try:
+            await asyncio.to_thread(_preload_once)
+        except Exception as exc:  # pragma: no cover
+            logger.error("Background preload failed: %s", exc, exc_info=True)
+        await asyncio.sleep(PRELOAD_INTERVAL_SECONDS)
+
+
+# Background preload disabled for lean operation - dashboard fetches on-demand only
+# @app.on_event("startup")
+# async def _start_preload_task():
+#     """Kick off the periodic preload loop."""
+#     global preload_task
+#     if preload_task is None:
+#         preload_task = asyncio.create_task(_preload_loop())
+#         logger.info("Preload task started (every %ss, retention %ss)", PRELOAD_INTERVAL_SECONDS, PRELOAD_RETENTION_SECONDS)
+
+
+@app.on_event("shutdown")
+async def _stop_preload_task():
+    """Stop the periodic preload loop cleanly."""
+    global preload_task
+    if preload_task:
+        preload_task.cancel()
+        try:
+            await preload_task
+        except asyncio.CancelledError:
+            pass
+        preload_task = None
 
 
 
@@ -89,9 +244,58 @@ class BacktestRequest(BaseModel):
     slippage_bps: float = 5.0
 
 
+class BondPriceRequest(BaseModel):
+    face_value: float = 1000.0
+    coupon_rate_pct: float
+    years_to_maturity: float
+    frequency: int = 2
+    market_rate_pct: Optional[float] = None
+    price: Optional[float] = None
+    market: Optional[str] = "US Treasuries"
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/monitor")
+def monitor():
+    """Lightweight monitoring: cache sizes, preload status, resource snapshot."""
+    process_mem_mb = None
+    if psutil:
+        try:
+            process = psutil.Process(os.getpid())
+            process_mem_mb = round(process.memory_info().rss / (1024 * 1024), 2)
+        except Exception:
+            process_mem_mb = None
+    else:
+        try:
+            import resource  # type: ignore
+            usage = resource.getrusage(resource.RUSAGE_SELF)
+            # On macOS ru_maxrss is bytes; on Linux it's KB
+            rss_bytes = usage.ru_maxrss if usage.ru_maxrss > 10**7 else usage.ru_maxrss * 1024
+            process_mem_mb = round(rss_bytes / (1024 * 1024), 2)
+        except Exception:
+            process_mem_mb = None
+
+    return {
+        "preload": {
+            "interval_sec": PRELOAD_INTERVAL_SECONDS,
+            "retention_sec": PRELOAD_RETENTION_SECONDS,
+            "last_run": last_preload_timestamp.isoformat() if last_preload_timestamp else None,
+            "stats": last_preload_stats,
+            "opportunities_cached": len(last_preload_opportunities),
+        },
+        "caches": {
+            "dashboard_cache": {"size": len(dashboard_cache), "ttl": dashboard_cache.ttl},
+            "historical_fetcher": {"size": len(shared_historical_fetcher.cache), "ttl": shared_historical_fetcher.cache.ttl},
+            "data_loader": {"size": len(shared_loader.cache), "ttl": shared_loader.cache.ttl},
+        },
+        "resources": {
+            "process_mem_mb": process_mem_mb,
+        },
+    }
 
 
 @app.post("/scan")
@@ -99,14 +303,14 @@ def scan(req: ScanRequest, x_api_key: Optional[str] = Header(None)):
     verify_api_key(x_api_key)
     check_rate_limit("scan")
 
-    loader = DataLoader()
-    scanner = MarketScanner(data_loader=loader)
-    opps = scanner.scan_stocks(
+    opps = shared_scanner.scan_stocks(
         req.symbols,
         min_confidence=req.min_confidence,
         strategy=req.strategy,
         asset_type=req.asset_type.value,
         period=req.period,
+        full_analysis=True,
+        historical_years=1.0
     )
     return {"count": len(opps), "opportunities": opps}
 
@@ -148,10 +352,10 @@ def home(request: Request):
             "title": "FDV-QUANTS",
             "endpoints": [
                 {"method": "GET", "path": "/home", "desc": "Home - navigation"},
-                {"method": "GET", "path": "/dashboard", "desc": "Trading opportunities dashboard"},
-                {"method": "GET", "path": "/gallery", "desc": "Chart gallery"},
+                {"method": "GET", "path": "/yield-curve", "desc": "Interest rate curve calculator"},
+                {"method": "GET", "path": "/bond-pricer", "desc": "Bond pricer for US/EU"},
+                {"method": "GET", "path": "/reports", "desc": "PDF reports & analysis"},
                 {"method": "GET", "path": "/health", "desc": "Health check"},
-                {"method": "GET", "path": "/", "desc": "API root"},
                 {"method": "POST", "path": "/scan", "desc": "Scan for trading opportunities (requires API key)"},
                 {"method": "POST", "path": "/backtest", "desc": "Backtest strategies (requires API key)"},
             ],
@@ -225,27 +429,186 @@ def _categorize_opportunities(opportunities: List[Dict]) -> Dict[str, List[Dict]
     }
 
 
+BOND_MARKETS = ["US Treasuries", "EU Gov"]
+
+BOND_PRESETS = {
+    "US Treasuries": [
+        {"id": "ust-2y", "name": "US Treasury 2Y", "face_value": 1000, "coupon_rate_pct": 4.2, "years_to_maturity": 2.0, "frequency": 2, "market_rate_pct": 4.1, "price": None},
+        {"id": "ust-5y", "name": "US Treasury 5Y", "face_value": 1000, "coupon_rate_pct": 3.8, "years_to_maturity": 5.0, "frequency": 2, "market_rate_pct": 3.9, "price": None},
+        {"id": "ust-10y", "name": "US Treasury 10Y", "face_value": 1000, "coupon_rate_pct": 4.0, "years_to_maturity": 10.0, "frequency": 2, "market_rate_pct": 4.2, "price": None},
+    ],
+    "EU Gov": [
+        {"id": "bund-5y", "name": "Bund 5Y", "face_value": 1000, "coupon_rate_pct": 2.5, "years_to_maturity": 5.0, "frequency": 1, "market_rate_pct": 2.4, "price": None},
+        {"id": "bund-10y", "name": "Bund 10Y", "face_value": 1000, "coupon_rate_pct": 2.8, "years_to_maturity": 10.0, "frequency": 1, "market_rate_pct": 2.6, "price": None},
+        {"id": "oat-7y", "name": "France OAT 7Y", "face_value": 1000, "coupon_rate_pct": 2.9, "years_to_maturity": 7.0, "frequency": 1, "market_rate_pct": 2.7, "price": None},
+    ],
+}
+
+
+def _build_bond_cashflows(face_value: float, coupon_rate_pct: float, years_to_maturity: float, frequency: int) -> List[Dict[str, float]]:
+    periods = max(int(round(years_to_maturity * frequency)), 1)
+    coupon_payment = face_value * (coupon_rate_pct / 100.0) / frequency
+    cashflows = []
+    for n in range(1, periods + 1):
+        cashflow = coupon_payment
+        if n == periods:
+            cashflow += face_value
+        cashflows.append({
+            "period": n,
+            "cashflow": cashflow,
+            "time_years": n / frequency
+        })
+    return cashflows
+
+
+def _price_from_rate(cashflows: List[Dict[str, float]], rate_pct: float, frequency: int) -> Optional[float]:
+    if rate_pct is None:
+        return None
+    rate_decimal = rate_pct / 100.0
+    total = 0.0
+    for item in cashflows:
+        discount = (1 + rate_decimal / frequency) ** item["period"]
+        total += item["cashflow"] / discount
+    return total
+
+
+def _ytm_from_price(cashflows: List[Dict[str, float]], target_price: float, frequency: int, max_rate: float = 0.3) -> Optional[float]:
+    """
+    Solve for yield to maturity (annualized, percent) via binary search.
+    """
+    if target_price is None or target_price <= 0 or not cashflows:
+        return None
+    
+    low = 0.0
+    high = max_rate
+    mid = 0.0
+    for _ in range(80):
+        mid = (low + high) / 2
+        price_estimate = _price_from_rate(cashflows, mid * 100, frequency)
+        if price_estimate is None:
+            return None
+        if abs(price_estimate - target_price) < 1e-4:
+            break
+        if price_estimate > target_price:
+            low = mid
+        else:
+            high = mid
+    return mid * 100
+
+
+def _macaulay_duration(cashflows: List[Dict[str, float]], rate_pct: Optional[float], frequency: int, price: Optional[float]) -> Optional[float]:
+    if rate_pct is None or price is None or price <= 0:
+        return None
+    rate_decimal = rate_pct / 100.0
+    numerator = 0.0
+    for item in cashflows:
+        discount = (1 + rate_decimal / frequency) ** item["period"]
+        pv = item["cashflow"] / discount
+        numerator += item["time_years"] * pv
+    return numerator / price
+
+
+@app.get("/bond-pricer", response_class=HTMLResponse)
+def bond_pricer_page(request: Request):
+    return templates.TemplateResponse(
+        "bond_pricer.html",
+        {
+            "request": request,
+            "title": "Bond Pricer (US & EU)",
+            "markets": BOND_MARKETS,
+            "presets": BOND_PRESETS,
+            "presets_json": json.dumps(BOND_PRESETS),
+        },
+    )
+
+
+@app.post("/api/bond/price")
+def price_bond(req: BondPriceRequest):
+    """
+    Price a plain-vanilla bond and solve YTM if price is provided.
+    """
+    try:
+        cashflows = _build_bond_cashflows(
+            face_value=req.face_value,
+            coupon_rate_pct=req.coupon_rate_pct,
+            years_to_maturity=req.years_to_maturity,
+            frequency=req.frequency,
+        )
+        
+        price_from_market = _price_from_rate(cashflows, req.market_rate_pct, req.frequency) if req.market_rate_pct is not None else None
+        target_price = req.price if req.price is not None else price_from_market
+        
+        if target_price is None:
+            raise HTTPException(status_code=400, detail="Provide either market_rate_pct (to compute price) or price (to solve YTM).")
+        
+        ytm_pct = _ytm_from_price(cashflows, target_price, req.frequency)
+        if ytm_pct is None and req.market_rate_pct is not None:
+            ytm_pct = req.market_rate_pct
+        
+        current_yield_pct = None
+        if target_price > 0:
+            annual_coupon = req.face_value * (req.coupon_rate_pct / 100.0)
+            current_yield_pct = (annual_coupon / target_price) * 100.0
+        
+        used_rate = ytm_pct if ytm_pct is not None else req.market_rate_pct
+        duration_years = _macaulay_duration(cashflows, used_rate, req.frequency, target_price)
+        modified_duration_years = None
+        if duration_years is not None and used_rate is not None:
+            modified_duration_years = duration_years / (1 + (used_rate / 100.0) / req.frequency)
+        
+        annotated_cashflows = []
+        if used_rate is not None:
+            rate_decimal = used_rate / 100.0
+            for item in cashflows:
+                discount = (1 + rate_decimal / req.frequency) ** item["period"]
+                pv = item["cashflow"] / discount
+                annotated_cashflows.append({**item, "pv": pv})
+        else:
+            annotated_cashflows = cashflows
+        
+        return {
+            "inputs": req.dict(),
+            "price": target_price,
+            "price_from_market": price_from_market,
+            "ytm_pct": ytm_pct,
+            "current_yield_pct": current_yield_pct,
+            "duration_years": duration_years,
+            "modified_duration_years": modified_duration_years,
+            "cashflows": annotated_cashflows,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error pricing bond: {e}")
+        raise HTTPException(status_code=500, detail="Failed to price bond")
+
+
 def _get_asset_type(symbol: str) -> AssetType:
     """Map symbol to its asset type."""
     symbol_upper = symbol.upper()
     
-    # Known crypto symbols
-    crypto_symbols = {"BTC", "ETH", "BNB", "SOL", "XRP", "ADA", "DOGE", "DOT", "MATIC", "AVAX", "LINK", "UNI", "LTC", "ATOM", "ETC"}
-    if symbol_upper in crypto_symbols:
+    # Crypto tickers typically use -USD suffix
+    if symbol_upper.endswith("-USD"):
         return AssetType.CRYPTO
     
-    # Known forex pairs
-    forex_pairs = {"EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURCHF", "USDMXN", "USDCNH", "USDINR"}
-    if symbol_upper in forex_pairs:
+    # Forex pairs use =X suffix
+    if symbol_upper.endswith("=X"):
         return AssetType.FOREX
     
-    # Known metals
-    metals = {"GOLD", "SILVER", "PLATINUM", "PALLADIUM"}
-    if symbol_upper in metals:
+    # Commodities futures prefixes
+    commodity_prefixes = ("GC=", "SI=", "PL=", "PA=", "CL=", "NG=", "HG=", "ZC=", "ZW=", "ZS=", "SB=", "KC=")
+    if symbol_upper.startswith(commodity_prefixes):
         return AssetType.METAL
     
     # Default to stock
     return AssetType.STOCK
+
+
+def series_to_dict(series: pd.Series) -> dict:
+    """Convert pandas Series to a JSON-safe dict, replacing NaN with None."""
+    if series is None or len(series) == 0:
+        return {}
+    return {str(k): (None if pd.isna(v) else float(v)) for k, v in series.items()}
 
 
 
@@ -423,14 +786,23 @@ def get_historical_data(
                 
                 analysis = analyzer.comprehensive_analysis()
                 
-                # Convert series to dict for JSON serialization
+                moving_averages = analysis.get("moving_averages", {}) if isinstance(analysis, dict) else {}
+                ma_20 = moving_averages.get("ma_20")
+                ma_50 = moving_averages.get("ma_50")
+                macd_data = analysis.get("macd", {}) if isinstance(analysis, dict) else {}
+                macd_series = macd_data.get("macd")
+                signal_series = macd_data.get("signal")
+                current_rsi = analysis.get("current_rsi", 50) if isinstance(analysis, dict) else 50
+                rsi_value = 50.0 if pd.isna(current_rsi) else float(current_rsi)
+
+                # Convert series to dict for JSON serialization (NaN -> None)
                 result["indicators"] = {
-                    "sma_20": analysis["moving_averages"]["ma_20"].to_dict() if "ma_20" in analysis.get("moving_averages", {}) else {},
-                    "sma_50": analysis["moving_averages"]["ma_50"].to_dict() if "ma_50" in analysis.get("moving_averages", {}) else {},
-                    "rsi": {"current": analysis.get("current_rsi", 50)},
+                    "sma_20": series_to_dict(ma_20) if ma_20 is not None else {},
+                    "sma_50": series_to_dict(ma_50) if ma_50 is not None else {},
+                    "rsi": {"current": rsi_value},
                     "macd": {
-                        "macd": analysis["macd"]["macd"].tail(100).to_dict() if "macd" in analysis.get("macd", {}) else {},
-                        "signal": analysis["macd"]["signal"].tail(100).to_dict() if "signal" in analysis.get("macd", {}) else {}
+                        "macd": series_to_dict(macd_series.tail(100)) if macd_series is not None else {},
+                        "signal": series_to_dict(signal_series.tail(100)) if signal_series is not None else {}
                     }
                 }
             except Exception as indicator_error:
@@ -486,12 +858,8 @@ def scan_sector(
         if not sector_enum:
             raise HTTPException(status_code=400, detail=f"Invalid sector: {sector}")
         
-        # Initialize scanner
-        loader = DataLoader()
-        scanner = MarketScanner(data_loader=loader)
-        
         # Scan sector
-        results = scanner.scan_by_sectors(
+        results = shared_scanner.scan_by_sectors(
             sectors=[sector_enum],
             min_confidence=min_confidence,
             strategy=strategy,
@@ -548,9 +916,6 @@ def market_overview(
                 },
             )
         
-        loader = DataLoader()
-        scanner = MarketScanner(data_loader=loader)
-        
         # Get top opportunities from each sector
         sector_opportunities = {}
         
@@ -558,10 +923,12 @@ def market_overview(
             # Get top 3 from each sector
             symbols = list(MARKET_SYMBOLS[sector])[:10]  # Scan top 10, return top 3
             
-            opportunities = scanner.scan_stocks(
+            opportunities = shared_scanner.scan_stocks(
                 symbols=symbols,
                 min_confidence=0.5,
-                asset_type=AssetType.STOCK.value
+                asset_type=AssetType.STOCK.value,
+                full_analysis=False,
+                historical_years=0.5
             )
             
             if opportunities:
@@ -569,20 +936,26 @@ def market_overview(
         
         # Get crypto, forex, commodities highlights
         other_opportunities = {
-            "crypto": scanner.scan_stocks(
+            "crypto": shared_scanner.scan_stocks(
                 symbols=CRYPTO_SYMBOLS[:5],
                 min_confidence=0.5,
-                asset_type=AssetType.CRYPTO.value
+                asset_type=AssetType.CRYPTO.value,
+                full_analysis=False,
+                historical_years=0.25
             )[:3],
-            "forex": scanner.scan_stocks(
+            "forex": shared_scanner.scan_stocks(
                 symbols=FOREX_PAIRS[:5],
                 min_confidence=0.5,
-                asset_type=AssetType.FOREX.value
+                asset_type=AssetType.FOREX.value,
+                full_analysis=False,
+                historical_years=0.25
             )[:3],
-            "commodities": scanner.scan_stocks(
+            "commodities": shared_scanner.scan_stocks(
                 symbols=COMMODITIES[:5],
                 min_confidence=0.5,
-                asset_type=AssetType.METAL.value
+                asset_type=AssetType.METAL.value,
+                full_analysis=False,
+                historical_years=0.25
             )[:3]
         }
         
@@ -620,6 +993,9 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
         asset_types: Comma-separated list of additional asset types (e.g., "crypto,forex,commodities")
     """
     try:
+        # Background preload disabled - dashboard fetches on-demand only
+        global last_preload_opportunities, last_preload_stats, last_preload_timestamp
+
         # Check cache first
         cache_key = _get_dashboard_cache_key(threshold, sectors, asset_types, demo)
         if cache_key in dashboard_cache:
@@ -641,81 +1017,117 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
                 },
             )
         
-        loader = DataLoader()
-        scanner = MarketScanner(data_loader=loader)
-        
         # Build symbol list based on filters
         all_symbols = []
         
         # Process sector filters
+        selected_sectors = None
         if sectors:
-            selected_sectors = [s.strip() for s in sectors.split(",")]
+            selected_sectors_list = [s.strip() for s in sectors.split(",") if s.strip()]
+            selected_sectors = set(selected_sectors_list)
             for sector in Sector:
                 if sector.value in selected_sectors:
                     all_symbols.extend(MARKET_SYMBOLS[sector])
         else:
             # Default: use a subset of symbols from each sector
             for sector, symbols in MARKET_SYMBOLS.items():
-                all_symbols.extend(symbols[:3])  # Top 3 from each sector
+                all_symbols.extend(symbols[:2])  # Top 2 from each sector
         
         # Add additional asset types if selected
+        selected_asset_types = None
         if asset_types:
-            selected_types = [t.strip() for t in asset_types.split(",")]
+            selected_types = [t.strip().lower() for t in asset_types.split(",") if t.strip()]
+            selected_asset_types = set(selected_types)
             if "crypto" in selected_types:
-                all_symbols.extend(CRYPTO_SYMBOLS[:10])  # Top 10 cryptos
+                all_symbols.extend(CRYPTO_SYMBOLS[:5])  # Top 5 cryptos
             if "forex" in selected_types:
-                all_symbols.extend(FOREX_PAIRS[:10])    # Top 10 forex pairs
+                all_symbols.extend(FOREX_PAIRS[:5])    # Top 5 forex pairs
             if "commodities" in selected_types:
-                all_symbols.extend(COMMODITIES[:8])     # Top 8 commodities
+                all_symbols.extend(COMMODITIES[:4])     # Top 4 commodities
         
         # Ensure threshold is valid (0.0 to 1.0)
         threshold = max(0.0, min(1.0, threshold))
         
         # Track failed data sources
         failed_sources = []
-        asset_type_counts = {}
-        
+        asset_type_counts: Dict[str, int] = {}
+        all_opps: List[Dict[str, Any]] = []
+        used_preloaded = False
+
         if demo:
             logger.info("Demo mode active: Using sample data for all symbols")
         
-        # Group symbols by asset type
-        symbols_by_type = {}
-        for symbol in all_symbols:
-            asset_type = _get_asset_type(symbol)
-            if asset_type.value not in symbols_by_type:
-                symbols_by_type[asset_type.value] = []
-            symbols_by_type[asset_type.value].append(symbol)
-        
-        # Scan each asset type separately
-        all_opps = []
-        for asset_type_value, symbols in symbols_by_type.items():
-            try:
-                if demo:
-                    # Demo mode: use scanner's scan_stocks but it will use sample data
-                    opps = scanner.scan_stocks(
-                        symbols,
-                        min_confidence=threshold,
-                        asset_type=asset_type_value,
-                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo"
+        # Prefer preloaded opportunities when available and fresh
+        if last_preload_opportunities and last_preload_timestamp:
+            age_sec = (datetime.utcnow() - last_preload_timestamp).total_seconds()
+            if age_sec <= PRELOAD_RETENTION_SECONDS * 2:  # allow a small grace window
+                preloaded_filtered = _filter_opportunities(
+                    last_preload_opportunities,
+                    threshold,
+                    selected_sectors,
+                    selected_asset_types,
+                )
+                if preloaded_filtered:
+                    all_opps = preloaded_filtered
+                    used_preloaded = True
+                    logger.info(
+                        "Served dashboard from preloaded snapshot (age %.1fs, %s items)",
+                        age_sec,
+                        len(all_opps),
                     )
-                    all_opps.extend(opps)
-                    asset_type_counts[asset_type_value] = len(opps)
-                    logger.info(f"[DEMO] {asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
-                else:
-                    # Normal mode: let scanner handle data fetching and fallback to sample data
-                    opps = scanner.scan_stocks(
-                        symbols,
-                        min_confidence=threshold,
-                        asset_type=asset_type_value,
-                        period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo"
-                    )
-                    all_opps.extend(opps)
-                    asset_type_counts[asset_type_value] = len(opps)
-                    logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
-            except Exception as e:
-                logger.error(f"Error scanning {asset_type_value} symbols: {e}")
-                failed_sources.append(f"{asset_type_value}_scanner")
-        
+                    for opp in all_opps:
+                        at = str(opp.get("asset_type", "")).lower()
+                        asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
+
+        # If no preloaded data or filtered result is empty, fall back to live scan
+        if not all_opps:
+            symbols_by_type = {}
+            for symbol in all_symbols:
+                asset_type = _get_asset_type(symbol)
+                if asset_type.value not in symbols_by_type:
+                    symbols_by_type[asset_type.value] = []
+                symbols_by_type[asset_type.value].append(symbol)
+
+            for asset_type_value, symbols in symbols_by_type.items():
+                try:
+                    if demo:
+                        # Demo mode: use scanner's scan_stocks but it will use sample data
+                        opps = shared_scanner.scan_stocks(
+                            symbols,
+                            min_confidence=threshold,
+                            asset_type=asset_type_value,
+                            period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
+                            full_analysis=False,
+                            historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
+                        )
+                        all_opps.extend(opps)
+                        asset_type_counts[asset_type_value] = len(opps)
+                        logger.info(f"[DEMO] {asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
+                    else:
+                        # Normal mode: let scanner handle data fetching and fallback to sample data
+                        opps = shared_scanner.scan_stocks(
+                            symbols,
+                            min_confidence=threshold,
+                            asset_type=asset_type_value,
+                            period="6mo" if asset_type_value == AssetType.STOCK.value else "3mo",
+                            full_analysis=False,
+                            historical_years=0.5 if asset_type_value == AssetType.STOCK.value else 0.25
+                        )
+                        all_opps.extend(opps)
+                        asset_type_counts[asset_type_value] = len(opps)
+                        logger.info(f"{asset_type_value}: {len(opps)} opportunities from {len(symbols)} symbols")
+                except Exception as e:
+                    logger.error(f"Error scanning {asset_type_value} symbols: {e}")
+                    failed_sources.append(f"{asset_type_value}_scanner")
+
+            # If still no opportunities, fallback to last preload (unfiltered) to keep page populated
+            if not all_opps and last_preload_opportunities:
+                logger.warning("Using last preloaded opportunities as fallback (no fresh data after scan).")
+                all_opps = list(last_preload_opportunities)
+                for opp in all_opps:
+                    at = str(opp.get("asset_type", "")).lower()
+                    asset_type_counts[at] = asset_type_counts.get(at, 0) + 1
+
         # Categorize opportunities
         categorized = _categorize_opportunities(all_opps)
         
@@ -728,7 +1140,7 @@ def dashboard(request: Request, threshold: float = 0.2, demo: bool = False,
             "failed_sources": failed_sources,
             "asset_type_counts": asset_type_counts,
         }
-        logger.info(f"Dashboard results cached with key: {cache_key}")
+        logger.info(f"Dashboard results cached with key: {cache_key} (used_preloaded={used_preloaded}, count={len(all_opps)})")
         
         return templates.TemplateResponse(
             "dashboard.html",
@@ -1089,22 +1501,167 @@ def generate_pdf_report(symbol: str, signal_type: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gallery", response_class=HTMLResponse)
-def gallery(request: Request):
+@app.get("/reports", response_class=HTMLResponse)
+def reports(request: Request):
     """
-    Image gallery for generated charts (served from output/).
+    Reports page for generated PDF analysis reports (served from output/).
     """
     output_dir = "output"
     files = []
     if os.path.isdir(output_dir):
         files = sorted(
-            [f for f in os.listdir(output_dir) if f.lower().endswith(".png")]
+            [f for f in os.listdir(output_dir) if f.lower().endswith(".pdf")]
         )
     return templates.TemplateResponse(
-        "gallery.html",
+        "reports.html",
         {
             "request": request,
             "files": files,
-            "title": "Chart Gallery",
+            "title": "Financial Reports",
         },
     )
+
+
+# ==================== YIELD CURVE ENDPOINTS ====================
+
+from src.analysis.yield_curve import YieldCurve, CurveFactory
+from src.analysis.yield_curve.indexes import IndexRegistry, IndexCurveFactory
+
+
+class YieldCurveRequest(BaseModel):
+    tenors: Optional[List[float]] = None
+    rates: Optional[List[float]] = None
+    bonds: Optional[List[Dict[str, Any]]] = None
+    interpolation: str = "cubic_spline"
+    compounding: str = "simple"
+
+
+class IndexCurveRequest(BaseModel):
+    index_rates: Dict[str, List[Dict[str, float]]]
+    primary_index: Optional[str] = None
+    interpolation: str = "cubic_spline"
+    compounding: str = "continuous"
+
+
+@app.get("/yield-curve", response_class=HTMLResponse)
+def yield_curve_page(request: Request):
+    """Yield curve calculator UI."""
+    return templates.TemplateResponse(
+        "yield_curve.html",
+        {"request": request, "title": "Yield Curve Calculator"},
+    )
+
+
+@app.post("/api/yield-curve/calculate")
+def calculate_yield_curve(req: YieldCurveRequest):
+    """Calculate yield curve from tenors/rates or bootstrap from bonds."""
+    try:
+        if req.bonds is not None:
+            curve = CurveFactory.create_from_bonds(
+                bonds=req.bonds,
+                bootstrapper_type="bond",
+                interpolation=req.interpolation,
+                compounding=req.compounding,
+            )
+        elif req.tenors is not None and req.rates is not None:
+            curve = CurveFactory.create_spot_curve(
+                tenors=req.tenors,
+                rates=req.rates,
+                interpolation=req.interpolation,
+                compounding=req.compounding,
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Provide either (tenors, rates) or bonds")
+
+        curve_data = []
+        for tenor, rate in zip(curve.tenors, curve.rates):
+            try:
+                df = curve.discount_factor(tenor)
+                curve_data.append({
+                    "tenor": float(tenor),
+                    "rate": float(rate),
+                    "discount_factor": float(df),
+                })
+            except Exception:
+                pass
+
+        return {"curve_data": curve_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error calculating yield curve: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/yield-curve/indexes")
+def list_indexes(currency: Optional[str] = None):
+    """List available interest rate indexes."""
+    try:
+        all_indexes = IndexRegistry.list_all()
+        indexes = {}
+        for code, idx in all_indexes.items():
+            if currency and idx.currency.upper() != currency.upper():
+                continue
+            indexes[code] = {
+                "code": code,
+                "name": idx.name,
+                "currency": idx.currency,
+                "day_count": idx.day_count,
+                "compounding": idx.compounding,
+            }
+        return {"indexes": indexes}
+    except Exception as e:
+        logger.error(f"Error listing indexes: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/yield-curve/from-index")
+def create_index_curve(req: IndexCurveRequest):
+    """Create yield curve from interest rate indexes (Murex-style)."""
+    try:
+        curve = IndexCurveFactory.create_from_multiple_indexes(
+            index_rates=req.index_rates,
+            primary_index=req.primary_index,
+            interpolation=req.interpolation,
+            compounding=req.compounding,
+        )
+
+        curve_data = []
+        for tenor, rate in zip(curve.tenors, curve.rates):
+            try:
+                df = curve.discount_factor(tenor)
+                curve_data.append({
+                    "tenor": float(tenor),
+                    "rate": float(rate),
+                    "discount_factor": float(df),
+                })
+            except Exception:
+                pass
+
+        return {"curve_data": curve_data}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating index curve: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/yield-curve/fetch-real")
+def fetch_real_treasury_yields():
+    """Fetch real US Treasury yields from FRED API."""
+    try:
+        from src.api_clients.fred_api import FREDClient
+        
+        fred_api_key = os.environ.get("FRED_API_KEY")
+        if not fred_api_key:
+            raise HTTPException(status_code=400, detail="FRED_API_KEY not configured. Add it to your .env file.")
+        
+        client = FREDClient(api_key=fred_api_key)
+        data = client.get_yield_curve_data()
+        
+        return {"data": data, "success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching FRED data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))

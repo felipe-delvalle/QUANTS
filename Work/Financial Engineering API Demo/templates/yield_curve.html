@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title }}</title>
+  <style>
+    :root {
+      --bg: #0b1221;
+      --panel: #111829;
+      --panel-2: #182035;
+      --border: #243047;
+      --accent: #5de0e6;
+      --accent-2: #6be07b;
+      --text: #e8edf6;
+      --muted: #a0a8b8;
+      --warn: #ffb347;
+    }
+    body { margin: 20px; font-family: Arial, sans-serif; background: var(--bg); color: var(--text); }
+    h1 { color: var(--accent); margin-bottom: 8px; }
+    p { color: var(--muted); margin-top: 0; }
+    .layout { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 16px; align-items: start; }
+    .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; box-shadow: 0 8px 20px rgba(0,0,0,0.2); }
+    .card h2 { margin: 0 0 12px 0; color: var(--accent); font-size: 18px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); margin-bottom: 12px; box-sizing: border-box; }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .inline { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .actions { display: flex; gap: 10px; margin-top: 4px; }
+    button { padding: 10px 14px; border: none; border-radius: 8px; cursor: pointer; font-weight: 700; }
+    .primary { background: var(--accent); color: var(--bg); }
+    .secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+    .primary:hover { background: #4bc4ca; }
+    .secondary:hover { border-color: var(--accent); }
+    .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+    .metric { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .metric .label { font-size: 12px; color: var(--muted); }
+    .metric .value { font-size: 20px; font-weight: 700; color: var(--accent); }
+    .pill { display: inline-block; padding: 4px 10px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); font-size: 12px; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .link { color: var(--accent); text-decoration: none; font-weight: 700; }
+    .link:hover { text-decoration: underline; }
+    .tenor-inputs { margin-bottom: 12px; }
+    .tenor-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; margin-bottom: 8px; align-items: center; }
+    .tenor-row input { margin-bottom: 0; }
+    .remove-btn { padding: 8px 12px; background: #ff7b7b; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 12px; }
+    .remove-btn:hover { background: #ff5a5a; }
+    .add-btn { padding: 8px 12px; background: var(--accent-2); color: var(--bg); border: none; border-radius: 6px; cursor: pointer; font-size: 12px; margin-top: 8px; }
+    .add-btn:hover { background: #5acf5f; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+    th, td { padding: 8px; text-align: left; border: 1px solid var(--border); font-size: 13px; }
+    th { background: var(--panel-2); color: var(--accent); }
+    tr:nth-child(even) { background: var(--panel-2); }
+    .error { color: #ff7b7b; margin-top: 8px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>Interest Rate Curve Calculator</h1>
+  <div class="row">
+    <span class="pill">Spot rates, forward rates, discount factors</span>
+    <span class="pill">Bootstrapping from bonds or deposits</span>
+    <a href="/home" class="link">← Back to Home</a>
+  </div>
+  <p>Enter yield curve data (tenors and rates) or bootstrap from market instruments. Calculate spot rates, forward rates, discount factors, and zero coupon bond prices.</p>
+
+  <div class="layout">
+    <div class="card">
+      <h2>Inputs</h2>
+      
+      <label for="preset">Reference Yield Curves</label>
+      <select id="preset" onchange="loadPreset()">
+        <option value="">Custom / Manual Entry</option>
+        <option value="ust_par_yield_curve">Treasury Par Yield Curve</option>
+        <option value="ust_normal_yield_curve">Normal Yield Curve</option>
+        <option value="ust_inverted_yield_curve">Inverted Yield Curve</option>
+        <option value="euro_area_government_bonds">Euro Area Government Bond Yields</option>
+      </select>
+      <div style="font-size: 11px; color: var(--muted); margin-top: -8px; margin-bottom: 12px;">
+        Reference curves for analysis. For live market data, use FRED button below.
+      </div>
+
+      <label for="mode">Mode</label>
+      <select id="mode" onchange="toggleInputMode()">
+        <option value="manual">Manual Entry</option>
+        <option value="bootstrap">Bootstrap from Bonds</option>
+        <option value="index">Index-Based (Murex-style)</option>
+      </select>
+
+      <div id="manualInputs">
+        <label>Tenors (years) and Rates (%)</label>
+        <div id="tenorInputs" class="tenor-inputs">
+          <div class="tenor-row">
+            <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01" value="0.25">
+            <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0" value="4.5">
+            <button class="remove-btn" onclick="removeTenorRow(this)" style="display: none;">×</button>
+          </div>
+          <div class="tenor-row">
+            <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01" value="0.5">
+            <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0" value="4.7">
+            <button class="remove-btn" onclick="removeTenorRow(this)" style="display: none;">×</button>
+          </div>
+          <div class="tenor-row">
+            <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01" value="1.0">
+            <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0" value="4.8">
+            <button class="remove-btn" onclick="removeTenorRow(this)">×</button>
+          </div>
+        </div>
+        <button class="add-btn" onclick="addTenorRow()">+ Add Tenor</button>
+      </div>
+
+      <div id="bootstrapInputs" style="display: none;">
+        <label>Bond Data (JSON format)</label>
+        <textarea id="bondData" rows="8" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-family: monospace; font-size: 12px; box-sizing: border-box;" placeholder='[{"maturity": 1.0, "coupon": 0.04, "price": 100.0, "frequency": 2}, {"maturity": 2.0, "coupon": 0.045, "price": 100.5, "frequency": 2}]'></textarea>
+      </div>
+
+      <div id="indexInputs" style="display: none;">
+        <label>Currency</label>
+        <select id="indexCurrency" onchange="loadIndexesForCurrency()">
+          <option value="">All Currencies</option>
+          <option value="USD">USD</option>
+          <option value="EUR">EUR</option>
+          <option value="GBP">GBP</option>
+        </select>
+        
+        <label>Primary Index</label>
+        <select id="primaryIndex">
+          <option value="">Select Primary Index</option>
+        </select>
+        
+        <div id="indexRatesContainer" style="margin-top: 12px;">
+          <label>Index Rates</label>
+          <div id="indexRatesList"></div>
+          <button class="add-btn" onclick="addIndexRate()" style="margin-top: 8px;">+ Add Index Rate</button>
+        </div>
+        
+        <div style="font-size: 11px; color: var(--muted); margin-top: 8px;">
+          Build curves from interest rate indexes (SOFR, LIBOR, EURIBOR, etc.) - similar to Murex methodology
+        </div>
+      </div>
+
+      <div class="inline">
+        <div>
+          <label for="interpolation">Interpolation</label>
+          <select id="interpolation">
+            <option value="linear">Linear</option>
+            <option value="cubic_spline" selected>Cubic Spline</option>
+            <option value="log_linear">Log-Linear</option>
+          </select>
+        </div>
+        <div>
+          <label for="compounding">Compounding</label>
+          <select id="compounding">
+            <option value="simple" selected>Simple</option>
+            <option value="continuous">Continuous</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button class="primary" onclick="calculateCurve()">Calculate</button>
+        <button class="secondary" onclick="resetForm()">Reset</button>
+      </div>
+      
+      <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);">
+        <button class="primary" onclick="fetchRealData()" style="width: 100%;" id="fetchRealBtn">
+          📊 Fetch Real Treasury Yields (FRED)
+        </button>
+        <div style="font-size: 11px; color: var(--muted); margin-top: 6px; text-align: center;">
+          Get current US Treasury rates from Federal Reserve
+        </div>
+      </div>
+      <div id="formError" class="error" style="display: none;"></div>
+    </div>
+
+    <div class="card">
+      <h2>Yield Curve</h2>
+      <div style="position: relative; height: 400px; margin-bottom: 20px;">
+        <canvas id="yieldCurveChart"></canvas>
+      </div>
+
+      <div class="metrics" style="margin-top: 16px;">
+        <div class="metric">
+          <div class="label">Max Tenor</div>
+          <div class="value" id="maxTenor">–</div>
+        </div>
+        <div class="metric">
+          <div class="label">Min Rate</div>
+          <div class="value" id="minRate">–</div>
+        </div>
+        <div class="metric">
+          <div class="label">Max Rate</div>
+          <div class="value" id="maxRate">–</div>
+        </div>
+        <div class="metric">
+          <div class="label">Curve Shape</div>
+          <div class="value" id="curveShape">–</div>
+        </div>
+      </div>
+
+      <h3 style="color: var(--accent); margin-top: 16px; margin-bottom: 6px;">Curve Data</h3>
+      <table id="curveTable">
+        <thead>
+          <tr>
+            <th>Tenor (years)</th>
+            <th>Rate (%)</th>
+            <th>Discount Factor</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="3" style="text-align:center; color: var(--muted);">Run a calculation to see curve data</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script>
+    let yieldCurveChart = null;
+
+    // Reference yield curves using official Treasury terminology
+    // Official names per U.S. Treasury: "Market Yield on U.S. Treasury Securities at X-Year Constant Maturity"
+    // Standard yield curve shapes: Normal, Inverted, Steep, Flat, Humped
+    const PRESETS = {
+      ust_par_yield_curve: {
+        name: "Treasury Par Yield Curve",
+        description: "U.S. Treasury Par Yield Curve (Constant Maturity Rates)",
+        source: "U.S. Department of the Treasury methodology",
+        tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
+        rates: [5.25, 5.30, 5.35, 5.20, 5.10, 4.95, 4.85, 4.75, 4.90, 4.95],
+      },
+      ust_normal_yield_curve: {
+        name: "Normal Yield Curve",
+        description: "Upward-sloping yield curve (normal market conditions)",
+        source: "Standard yield curve shape",
+        tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
+        rates: [2.5, 2.6, 2.7, 2.8, 2.9, 3.0, 3.1, 3.2, 3.4, 3.5],
+      },
+      ust_inverted_yield_curve: {
+        name: "Inverted Yield Curve",
+        description: "Downward-sloping yield curve (recession indicator)",
+        source: "Standard yield curve shape",
+        tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 20, 30],
+        rates: [5.5, 5.4, 5.3, 5.2, 5.1, 5.0, 4.9, 4.8, 4.7, 4.6],
+      },
+      euro_area_government_bonds: {
+        name: "Euro Area Government Bond Yields",
+        description: "Eurozone sovereign bond yield curve",
+        source: "ECB methodology",
+        tenors: [0.25, 0.5, 1, 2, 3, 5, 7, 10, 15, 20],
+        rates: [3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 4.0, 4.1],
+      }
+    };
+
+    function loadPreset() {
+      const preset = document.getElementById('preset').value;
+      if (!preset || !PRESETS[preset]) return;
+      
+      const data = PRESETS[preset];
+      const container = document.getElementById('tenorInputs');
+      container.innerHTML = '';
+      
+      data.tenors.forEach((tenor, idx) => {
+        const row = document.createElement('div');
+        row.className = 'tenor-row';
+        row.innerHTML = `
+          <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01" value="${tenor}">
+          <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0" value="${data.rates[idx]}">
+          <button class="remove-btn" onclick="removeTenorRow(this)">×</button>
+        `;
+        container.appendChild(row);
+      });
+      updateRemoveButtons();
+    }
+
+    function initializeChart() {
+      const ctx = document.getElementById('yieldCurveChart');
+      if (yieldCurveChart) {
+        yieldCurveChart.destroy();
+      }
+      
+      yieldCurveChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Spot Rate (%)',
+            data: [],
+            borderColor: '#5de0e6',
+            backgroundColor: 'rgba(93, 224, 230, 0.1)',
+            borderWidth: 2,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 4,
+            pointBackgroundColor: '#5de0e6',
+            pointBorderColor: '#0b1221',
+            pointBorderWidth: 2
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              labels: {
+                color: '#e8edf6'
+              }
+            },
+            tooltip: {
+              backgroundColor: '#111829',
+              titleColor: '#5de0e6',
+              bodyColor: '#e8edf6',
+              borderColor: '#243047',
+              borderWidth: 1,
+              callbacks: {
+                label: function(context) {
+                  return `Rate: ${context.parsed.y.toFixed(3)}%`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: 'Tenor (years)',
+                color: '#a0a8b8'
+              },
+              ticks: {
+                color: '#a0a8b8'
+              },
+              grid: {
+                color: '#243047'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Rate (%)',
+                color: '#a0a8b8'
+              },
+              ticks: {
+                color: '#a0a8b8',
+                callback: function(value) {
+                  return value.toFixed(2) + '%';
+                }
+              },
+              grid: {
+                color: '#243047'
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function updateChart(curveData) {
+      if (!yieldCurveChart) {
+        initializeChart();
+      }
+      
+      if (!curveData || curveData.length === 0) {
+        yieldCurveChart.data.labels = [];
+        yieldCurveChart.data.datasets[0].data = [];
+        yieldCurveChart.update();
+        return;
+      }
+
+      // Sort by tenor
+      const sorted = [...curveData].sort((a, b) => a.tenor - b.tenor);
+      
+      // Create smooth curve with interpolated points
+      const tenors = sorted.map(p => p.tenor);
+      const rates = sorted.map(p => p.rate * 100); // Convert to percentage
+      
+      // Add interpolated points for smoother curve
+      const smoothTenors = [];
+      const smoothRates = [];
+      const minTenor = Math.min(...tenors);
+      const maxTenor = Math.max(...tenors);
+      const steps = Math.max(50, (maxTenor - minTenor) * 10);
+      
+      for (let i = 0; i <= steps; i++) {
+        const t = minTenor + (maxTenor - minTenor) * (i / steps);
+        // Linear interpolation for smooth curve
+        let rate = 0;
+        if (t <= tenors[0]) {
+          rate = rates[0];
+        } else if (t >= tenors[tenors.length - 1]) {
+          rate = rates[rates.length - 1];
+        } else {
+          for (let j = 0; j < tenors.length - 1; j++) {
+            if (t >= tenors[j] && t <= tenors[j + 1]) {
+              const ratio = (t - tenors[j]) / (tenors[j + 1] - tenors[j]);
+              rate = rates[j] + (rates[j + 1] - rates[j]) * ratio;
+              break;
+            }
+          }
+        }
+        smoothTenors.push(t);
+        smoothRates.push(rate);
+      }
+
+      yieldCurveChart.data.labels = smoothTenors.map(t => t.toFixed(2));
+      yieldCurveChart.data.datasets[0].data = smoothRates.map((r, i) => ({
+        x: smoothTenors[i],
+        y: r
+      }));
+      yieldCurveChart.update();
+    }
+
+    function calculateCurveMetrics(curveData) {
+      if (!curveData || curveData.length === 0) return;
+      
+      const tenors = curveData.map(p => p.tenor);
+      const rates = curveData.map(p => p.rate * 100);
+      
+      const maxTenor = Math.max(...tenors);
+      const minRate = Math.min(...rates);
+      const maxRate = Math.max(...rates);
+      
+      // Determine curve shape
+      let shape = 'Normal';
+      if (rates[0] > rates[rates.length - 1]) {
+        shape = 'Inverted';
+      } else if (rates[0] < rates[rates.length - 1]) {
+        shape = 'Normal';
+      } else {
+        shape = 'Flat';
+      }
+      
+      document.getElementById('maxTenor').textContent = maxTenor.toFixed(2) + 'Y';
+      document.getElementById('minRate').textContent = minRate.toFixed(2) + '%';
+      document.getElementById('maxRate').textContent = maxRate.toFixed(2) + '%';
+      document.getElementById('curveShape').textContent = shape;
+    }
+
+    function toggleInputMode() {
+      const mode = document.getElementById('mode').value;
+      document.getElementById('manualInputs').style.display = mode === 'manual' ? 'block' : 'none';
+      document.getElementById('bootstrapInputs').style.display = mode === 'bootstrap' ? 'block' : 'none';
+      document.getElementById('indexInputs').style.display = mode === 'index' ? 'block' : 'none';
+      
+      if (mode === 'index') {
+        loadAvailableIndexes();
+      }
+    }
+    
+    // Initialize on page load
+    document.getElementById('mode').addEventListener('change', toggleInputMode);
+
+    function addTenorRow() {
+      const container = document.getElementById('tenorInputs');
+      const row = document.createElement('div');
+      row.className = 'tenor-row';
+      row.innerHTML = `
+        <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01">
+        <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0">
+        <button class="remove-btn" onclick="removeTenorRow(this)">×</button>
+      `;
+      container.appendChild(row);
+      updateRemoveButtons();
+    }
+
+    function removeTenorRow(btn) {
+      btn.parentElement.remove();
+      updateRemoveButtons();
+    }
+
+    function updateRemoveButtons() {
+      const rows = document.querySelectorAll('.tenor-row');
+      rows.forEach((row, idx) => {
+        const btn = row.querySelector('.remove-btn');
+        btn.style.display = rows.length > 1 ? 'block' : 'none';
+      });
+    }
+
+    function resetForm() {
+      document.getElementById('tenorInputs').innerHTML = `
+        <div class="tenor-row">
+          <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01" value="0.25">
+          <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0" value="4.5">
+          <button class="remove-btn" onclick="removeTenorRow(this)" style="display: none;">×</button>
+        </div>
+      `;
+      document.getElementById('formError').style.display = 'none';
+      document.getElementById('curveTable').innerHTML = `
+        <thead>
+          <tr>
+            <th>Tenor (years)</th>
+            <th>Rate (%)</th>
+            <th>Discount Factor</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td colspan="3" style="text-align:center; color: var(--muted);">Run a calculation to see curve data</td></tr>
+        </tbody>
+      `;
+      ['spot3y', 'df3y', 'forward2y5y', 'zcPrice3y'].forEach(id => {
+        document.getElementById(id).textContent = '–';
+      });
+    }
+
+    // Index-based curve functions
+    let availableIndexes = {};
+    
+    async function loadAvailableIndexes() {
+      try {
+        const currency = document.getElementById('indexCurrency').value;
+        const url = currency ? `/api/yield-curve/indexes?currency=${currency}` : '/api/yield-curve/indexes';
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to load indexes');
+        
+        const data = await response.json();
+        availableIndexes = data.indexes;
+        
+        // Populate primary index dropdown
+        const primarySelect = document.getElementById('primaryIndex');
+        primarySelect.innerHTML = '<option value="">Select Primary Index</option>';
+        Object.keys(availableIndexes).forEach(code => {
+          const index = availableIndexes[code];
+          const option = document.createElement('option');
+          option.value = code;
+          option.textContent = `${code} - ${index.name}`;
+          primarySelect.appendChild(option);
+        });
+      } catch (error) {
+        console.error('Error loading indexes:', error);
+      }
+    }
+    
+    function loadIndexesForCurrency() {
+      loadAvailableIndexes();
+      // Clear existing index rates when currency changes
+      document.getElementById('indexRatesList').innerHTML = '';
+    }
+    
+    function addIndexRate() {
+      const container = document.getElementById('indexRatesList');
+      const row = document.createElement('div');
+      row.className = 'tenor-row';
+      row.style.marginBottom = '8px';
+      
+      row.innerHTML = `
+        <select class="index-select" style="width: 35%; margin-right: 8px;">
+          <option value="">Select Index</option>
+          ${Object.keys(availableIndexes).map(code => 
+            `<option value="${code}">${code}</option>`
+          ).join('')}
+        </select>
+        <input type="number" class="index-tenor" placeholder="Tenor (years)" step="0.01" min="0.01" style="width: 25%; margin-right: 8px;">
+        <input type="number" class="index-rate" placeholder="Rate (%)" step="0.01" min="0" style="width: 25%;">
+        <button class="remove-btn" onclick="removeIndexRate(this)">×</button>
+      `;
+      container.appendChild(row);
+    }
+    
+    function removeIndexRate(btn) {
+      btn.parentElement.remove();
+    }
+    
+    function collectIndexRates() {
+      const indexRates = {};
+      const rows = document.querySelectorAll('#indexRatesList .tenor-row');
+      
+      rows.forEach(row => {
+        const indexSelect = row.querySelector('.index-select');
+        const tenorInput = row.querySelector('.index-tenor');
+        const rateInput = row.querySelector('.index-rate');
+        
+        const indexCode = indexSelect.value;
+        const tenor = parseFloat(tenorInput.value);
+        const rate = parseFloat(rateInput.value);
+        
+        if (indexCode && !isNaN(tenor) && !isNaN(rate) && tenor > 0) {
+          if (!indexRates[indexCode]) {
+            indexRates[indexCode] = [];
+          }
+          indexRates[indexCode].push({
+            tenor: tenor,
+            rate: rate / 100 // Convert % to decimal
+          });
+        }
+      });
+      
+      return indexRates;
+    }
+    
+    // Load indexes on page load if in index mode
+    window.addEventListener('DOMContentLoaded', function() {
+      if (document.getElementById('mode').value === 'index') {
+        loadAvailableIndexes();
+      }
+    });
+
+    async function calculateCurve() {
+      const errorDiv = document.getElementById('formError');
+      errorDiv.style.display = 'none';
+      
+      try {
+        const mode = document.getElementById('mode').value;
+        let requestBody;
+
+        if (mode === 'manual') {
+          const tenors = [];
+          const rates = [];
+          document.querySelectorAll('.tenor-row').forEach(row => {
+            const tenor = parseFloat(row.querySelector('.tenor').value);
+            const rate = parseFloat(row.querySelector('.rate').value);
+            if (!isNaN(tenor) && !isNaN(rate) && tenor > 0) {
+              tenors.push(tenor);
+              rates.push(rate / 100); // Convert % to decimal
+            }
+          });
+
+          if (tenors.length === 0) {
+            throw new Error('Please enter at least one tenor and rate');
+          }
+
+          requestBody = {
+            tenors: tenors,
+            rates: rates,
+            interpolation: document.getElementById('interpolation').value,
+            compounding: document.getElementById('compounding').value
+          };
+        } else if (mode === 'index') {
+          // Index-based curve construction
+          const indexRates = collectIndexRates();
+          if (Object.keys(indexRates).length === 0) {
+            throw new Error('Please enter at least one index rate');
+          }
+          
+          const primaryIndex = document.getElementById('primaryIndex').value;
+          requestBody = {
+            index_rates: indexRates,
+            primary_index: primaryIndex || null,
+            interpolation: document.getElementById('interpolation').value,
+            day_count: null,
+            compounding: document.getElementById('compounding').value
+          };
+        } else {
+          const bondData = document.getElementById('bondData').value;
+          if (!bondData.trim()) {
+            throw new Error('Please enter bond data');
+          }
+          const bonds = JSON.parse(bondData);
+          requestBody = {
+            bonds: bonds,
+            interpolation: document.getElementById('interpolation').value,
+            compounding: document.getElementById('compounding').value
+          };
+        }
+
+        const endpoint = mode === 'index' ? '/api/yield-curve/from-index' : '/api/yield-curve/calculate';
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(requestBody)
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Calculation failed');
+        }
+
+        const result = await response.json();
+        displayResults(result);
+      } catch (error) {
+        errorDiv.textContent = error.message || 'An error occurred during calculation';
+        errorDiv.style.display = 'block';
+        console.error('Yield curve calculation error:', error);
+      }
+    }
+
+    function displayResults(result) {
+      // Update the yield curve chart
+      if (result.curve_data && result.curve_data.length > 0) {
+        updateChart(result.curve_data);
+        calculateCurveMetrics(result.curve_data);
+      }
+      
+      // Show info if curve is shorter than requested metrics
+      if (result.max_tenor && result.max_tenor < 3.0) {
+        const info = document.getElementById('formError');
+        if (info) {
+          info.textContent = `Note: Curve extends to ${result.max_tenor.toFixed(2)} years. Metrics use extrapolation.`;
+          info.style.display = 'block';
+          info.style.color = 'var(--warn)';
+        }
+      } else {
+        document.getElementById('formError').style.display = 'none';
+      }
+
+      if (result.curve_data && result.curve_data.length > 0) {
+        const tbody = document.createElement('tbody');
+        result.curve_data.forEach(point => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td>${point.tenor.toFixed(2)}</td>
+            <td>${(point.rate * 100).toFixed(3)}%</td>
+            <td>${point.discount_factor.toFixed(6)}</td>
+          `;
+          tbody.appendChild(row);
+        });
+        const table = document.getElementById('curveTable');
+        table.innerHTML = `
+          <thead>
+            <tr>
+              <th>Tenor (years)</th>
+              <th>Rate (%)</th>
+              <th>Discount Factor</th>
+            </tr>
+          </thead>
+        `;
+        table.appendChild(tbody);
+      }
+    }
+
+    updateRemoveButtons();
+
+    async function fetchRealData() {
+      const btn = document.getElementById('fetchRealBtn');
+      const errorDiv = document.getElementById('formError');
+      errorDiv.style.display = 'none';
+      
+      // Show loading state
+      const originalText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '⏳ Fetching...';
+      
+      try {
+        const response = await fetch('/api/yield-curve/fetch-real');
+        
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Failed to fetch real data');
+        }
+        
+        const result = await response.json();
+        
+        if (result.success && result.data) {
+          // Populate the tenor inputs with real data
+          const container = document.getElementById('tenorInputs');
+          container.innerHTML = '';
+          
+          result.data.tenors.forEach((tenor, idx) => {
+            const row = document.createElement('div');
+            row.className = 'tenor-row';
+            row.innerHTML = `
+              <input type="number" class="tenor" placeholder="Tenor (years)" step="0.01" min="0.01" value="${tenor}">
+              <input type="number" class="rate" placeholder="Rate (%)" step="0.01" min="0" value="${result.data.rates[idx].toFixed(2)}">
+              <button class="remove-btn" onclick="removeTenorRow(this)">×</button>
+            `;
+            container.appendChild(row);
+          });
+          
+          updateRemoveButtons();
+          
+          // Show success message
+          errorDiv.textContent = `✓ Fetched real Treasury yields from FRED (${result.data.source})`;
+          errorDiv.style.display = 'block';
+          errorDiv.style.color = 'var(--accent-2)';
+          
+          // Auto-calculate the curve
+          setTimeout(() => {
+            calculateCurve();
+          }, 500);
+        }
+      } catch (error) {
+        errorDiv.textContent = error.message;
+        errorDiv.style.display = 'block';
+        errorDiv.style.color = '#ff7b7b';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
+    
+    // Initialize chart on page load
+    window.addEventListener('DOMContentLoaded', function() {
+      initializeChart();
+    });
+  </script>
+</body>
+</html>
+

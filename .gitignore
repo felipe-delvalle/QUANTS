@@ -5,3 +5,14 @@ venv/
 __pycache__/
 .cursor/debug.log
 .cursor/chat_backups/
+
+# Yabai config files (protect from accidental commits)
+YABAI_RECOVERY_GUIDE.md
+recover_yabai_work.sh
+focus_financial.sh
+*yabai*
+*.yabairc
+.skhdrc
+FULL_BACKUP_20251227_145625.tar.gz
+*.tar.gz
+BACKUP_*/

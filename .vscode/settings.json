@@ -1,0 +1,25 @@
+{
+  // Cursor Chat Panel Configuration
+  // 
+  // To open chat in a new editor tab instead of the side panel, try these methods:
+  //
+  // METHOD 1 (Recommended): Right-click on the chat panel
+  //   - Right-click on the chat panel header/title
+  //   - Look for "Move to Editor" or "Open in Editor" option
+  //
+  // METHOD 2: Command Palette
+  //   - Press Cmd+Shift+P (macOS) or Ctrl+Shift+P (Windows/Linux)
+  //   - Search for "Cursor: Chat" or "Move Chat" or "Open Chat in Editor"
+  //
+  // METHOD 3: Cursor Settings UI
+  //   - Go to Cursor > Settings (or Cmd+,)
+  //   - Search for "chat" in settings
+  //   - Look for options like "Chat Panel Location" or "Open Chat in Editor"
+  //
+  // METHOD 4: Add to user settings.json
+  //   Location: ~/Library/Application Support/Cursor/User/settings.json
+  //   Try adding (if available):
+  //   "cursor.chat.panelLocation": "editor"
+  //   or
+  //   "cursor.chat.openInEditor": true
+}

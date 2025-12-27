@@ -1,0 +1,125 @@
+
+================================================================================
+CACHE & RAM CLEANUP + BACKGROUND PROCESSES REPORT
+Generated: 2025-12-07 22:39:42
+================================================================================
+
+✅ CACHE CLEANUP COMPLETED
+--------------------------------------------------------------------------------
+  • Python cache: 188 directories + 1,391 files removed
+  • .DS_Store files: Cleaned
+  • User caches: Cleaned (was 1.3 GB)
+  • LaTeX artifacts: Cleaned
+
+📊 CURRENT RAM STATUS
+--------------------------------------------------------------------------------
+  • Free Memory:     0.23 GB
+  • Inactive Memory: 5.54 GB (can be freed)
+  • Action Required: Run 'sudo purge' to free 5.54 GB
+
+================================================================================
+BACKGROUND PROCESSES IDENTIFIED
+================================================================================
+
+🔧 DEVELOPMENT SERVICES (Keep if needed)
+--------------------------------------------------------------------------------
+  1. Redis Server
+     • PID: 52269
+     • Memory: 4.5 MB
+     • Status: Running on 127.0.0.1:6379
+     • Action: Keep if using Redis, else stop
+
+  2. Docker Helper
+     • PID: 573
+     • Memory: 0.6 MB
+     • Status: Docker network helper
+     • Action: Keep if using Docker
+
+  3. Python (Anaconda)
+     • PID: 64062
+     • Memory: 14.3 MB
+     • Status: Background Python process
+     • Action: Check if needed
+
+  4. Node.js (Cursor Extensions)
+     • Multiple processes: ~244 MB total
+     • Status: Cursor extension servers
+     • Action: Part of Cursor, keep running
+
+💼 UTILITY APPLICATIONS (Can close if not using)
+--------------------------------------------------------------------------------
+  1. OneDrive - 204.8 MB total
+     • 3 processes running
+     • Action: Close if not syncing files
+
+  2. Jabra Direct - 133.2 MB total
+     • 5 processes running
+     • Action: Close if not using Jabra headset
+
+  3. Microsoft Defender - 16.3 MB
+     • Action: Keep for security
+
+  4. CopyClip 2 - 38.7 MB
+     • Action: Close if not using clipboard manager
+
+  5. Shottr - 51.6 MB
+     • Action: Close if not taking screenshots
+
+  6. Magnet - 23.7 MB
+     • Action: Close if not using window management
+
+  7. Scroll Reverser - 13.1 MB
+     • Action: Close if not using
+
+  8. Wacom Tablet - 23.3 MB total
+     • 2 processes
+     • Action: Close if not using tablet
+
+  9. Logitech Hub - 37.5 MB total
+     • 2 processes
+     • Action: Close if not using Logitech devices
+
+  10. ChatGPT Helper - 28.8 MB
+     • Action: Close if not using ChatGPT app
+
+  11. WhatsApp Service - 21.9 MB
+     • Action: Keep if using WhatsApp
+
+  12. Pulse Secure - 39.6 MB
+     • Action: Keep if using VPN/remote access
+
+  13. CleanMyMac Health Monitor - 8.7 MB
+     • Action: Keep if using CleanMyMac
+
+================================================================================
+RECOMMENDATIONS
+--------------------------------------------------------------------------------
+
+HIGH PRIORITY:
+  1. Run RAM purge: sudo purge (frees 5.54 GB)
+  2. Close OneDrive if not syncing (-204.8 MB)
+  3. Close Jabra if not using headset (-133.2 MB)
+
+MEDIUM PRIORITY:
+  4. Close CopyClip if not using (-38.7 MB)
+  5. Close Shottr if not taking screenshots (-51.6 MB)
+  6. Close Magnet if not using (-23.7 MB)
+  7. Close ChatGPT Helper if not using (-28.8 MB)
+
+LOW PRIORITY:
+  8. Close Wacom if not using tablet (-23.3 MB)
+  9. Close Logitech Hub if not using devices (-37.5 MB)
+  10. Close Scroll Reverser if not using (-13.1 MB)
+
+TOTAL POTENTIAL SAVINGS: ~530 MB from closing unused apps + 5.54 GB from purge
+
+================================================================================
+ESSENTIAL BACKGROUND SERVICES (Keep Running)
+--------------------------------------------------------------------------------
+  ✅ Redis (if using) - 4.5 MB
+  ✅ Docker Helper (if using) - 0.6 MB
+  ✅ Microsoft Defender - 16.3 MB (security)
+  ✅ Cursor Extensions - ~244 MB (part of IDE)
+  ✅ System Services (launchd, etc.)
+
+================================================================================
