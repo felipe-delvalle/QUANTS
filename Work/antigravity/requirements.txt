@@ -1,0 +1,7 @@
+flask==3.0.0
+gunicorn==21.2.0
+requests==2.31.0
+# MCP SDK - optional, for stdio mode
+# pip install git+https://github.com/modelcontextprotocol/python-sdk.git
+# This implementation uses HTTP-based MCP for Cloud Run compatibility
+
